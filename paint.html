@@ -91,6 +91,9 @@
   .strip .th.dragging { opacity: .3; }
   .strip .th.drop-before { box-shadow: -5px 0 0 -1px var(--accent); }
   .strip .th.drop-after { box-shadow: 5px 0 0 -1px var(--accent); }
+  .col { flex-direction: column; align-items: stretch; gap: 4px; font-size: 12px; color: var(--muted); }
+  .col input { background: #2e323b; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font-size: 14px; }
+  #uploadCard.attention { outline: 2px solid var(--accent); }
 </style>
 </head>
 <body>
@@ -162,6 +165,10 @@
     <div class="bar">
       <button id="saveBtn" class="wide" title="1 コマ目から最後に描いたコマまでを 2 周分書き出し">💾 WebM 動画を書き出し</button>
     </div>
+    <div class="bar">
+      <button id="uploadBtn" class="wide" title="WebM を作って Google ドライブのフォルダにアップロード">☁ ドライブにアップロード</button>
+    </div>
+    <span class="status" id="uploadStatus"></span>
   </section>
 
   <!-- ===== 機能パネル ===== -->
@@ -257,6 +264,22 @@
         <button id="savePngBtn">PNG で保存（このページ）</button>
       </div>
       <input type="file" id="fileInput" accept="image/*">
+    </div>
+
+    <div class="card" id="uploadCard">
+      <h3>☁ ドライブへのアップロード設定</h3>
+      <div class="stack">
+        <label class="col">Apps Script のウェブアプリ URL（…/exec）
+          <input type="text" id="upUrl" placeholder="https://script.google.com/macros/s/xxxxxxxx/exec">
+        </label>
+        <label class="col">名前（ファイル名の先頭に付きます）
+          <input type="text" id="upName" placeholder="例: 3年1組_やまだ">
+        </label>
+        <label class="col">パスワード（Code.gs で設定した場合のみ）
+          <input type="password" id="upPass" autocomplete="off">
+        </label>
+      </div>
+      <p class="note">tiles.html と同じ Apps Script（gas/Code.gs）を使います。入力内容はこのブラウザにだけ保存されます。</p>
     </div>
 
     <details class="card help">
@@ -1004,28 +1027,107 @@ playBtn.onclick = () => playing ? stop() : play();
 // 停止中は作画内容の変化を再生側にも反映
 setInterval(() => { if (!playing) showFrame(current); }, 100);
 
-// ---------- WebM 保存（最後に描いたコマまでを 2 周分） ----------
-document.getElementById('saveBtn').onclick = async () => {
+// ---------- WebM 作成（最後に描いたコマまでを 2 周分） ----------
+// 戻り値 { blob, frames, fps }。描かれたコマが無ければ null
+let recording = false;
+async function makeWebm() {
+  const list = playlist(true);   // 書き出しは常に 1 コマ目から最後に描いたコマまで
+  if (!list.length) { alert('描かれたコマがありません'); return null; }
+  if (recording) return null;
+  recording = true;
   const wasPlaying = playing;
   stop();
-  const fps = getFps();
-  const rec = new MediaRecorder(playCanvas.captureStream(fps), { mimeType: 'video/webm' });
-  const chunks = [];
-  rec.ondataavailable = e => chunks.push(e.data);
-  const done = new Promise(r => rec.onstop = r);
-  rec.start();
-  const list = playlist(true);   // 書き出しは常に 1 コマ目から最後に描いたコマまで
-  if (!list.length) { alert('描かれたコマがありません'); if (wasPlaying) play(); return; }
-  const T = list.length;
-  const len = document.getElementById('pingpong').checked && T > 1 ? 2 * T - 2 : T;
-  for (let s = 0; s < len * 2; s++) {
-    showFrame(list[indexAt(s, T)], list);
-    await new Promise(r => setTimeout(r, 1000 / fps));
+  try {
+    const fps = getFps();
+    const rec = new MediaRecorder(playCanvas.captureStream(fps), { mimeType: 'video/webm' });
+    const chunks = [];
+    rec.ondataavailable = e => chunks.push(e.data);
+    const done = new Promise(r => rec.onstop = r);
+    rec.start();
+    const T = list.length;
+    const len = document.getElementById('pingpong').checked && T > 1 ? 2 * T - 2 : T;
+    for (let s = 0; s < len * 2; s++) {
+      showFrame(list[indexAt(s, T)], list);
+      await new Promise(r => setTimeout(r, 1000 / fps));
+    }
+    rec.stop();
+    await done;
+    return { blob: new Blob(chunks, { type: 'video/webm' }), frames: T, fps };
+  } finally {
+    recording = false;
+    if (wasPlaying) play();
   }
-  rec.stop();
-  await done;
-  download(new Blob(chunks, { type: 'video/webm' }), `paint_flipbook_${T}f_${fps}fps.webm`);
-  if (wasPlaying) play();
+}
+
+document.getElementById('saveBtn').onclick = async () => {
+  const r = await makeWebm();
+  if (r) download(r.blob, `paint_flipbook_${r.frames}f_${r.fps}fps.webm`);
+};
+
+// ---------- Google ドライブへアップロード（Apps Script 経由） ----------
+const uploadStatus = document.getElementById('uploadStatus');
+const UP_FIELDS = ['upUrl', 'upName', 'upPass'];
+try {
+  const saved = JSON.parse(localStorage.getItem('paint-upload') || '{}');
+  // tiles.html で設定済みの Apps Script URL があれば初期値に使う
+  if (!saved.upUrl) saved.upUrl = JSON.parse(localStorage.getItem('tiles-drive') || '{}').gasUrl;
+  UP_FIELDS.forEach(k => { if (saved[k]) document.getElementById(k).value = saved[k]; });
+} catch (e) {}
+function saveUpload() {
+  try {
+    localStorage.setItem('paint-upload', JSON.stringify(Object.fromEntries(UP_FIELDS.map(k => [k, document.getElementById(k).value]))));
+  } catch (e) {}
+}
+UP_FIELDS.forEach(k => document.getElementById(k).addEventListener('change', saveUpload));
+
+const blobToBase64 = blob => new Promise((res, rej) => {
+  const fr = new FileReader();
+  fr.onload = () => res(fr.result.split(',')[1]);
+  fr.onerror = rej;
+  fr.readAsDataURL(blob);
+});
+const stamp = () => {
+  const d = new Date(), z = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
+};
+
+let uploading = false;
+document.getElementById('uploadBtn').onclick = async () => {
+  if (uploading) return;
+  const url = document.getElementById('upUrl').value.trim();
+  if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(url)) {
+    uploadStatus.textContent = '下の「ドライブへのアップロード設定」に Apps Script の URL を入力してください';
+    const card = document.getElementById('uploadCard');
+    card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    card.classList.add('attention');
+    setTimeout(() => card.classList.remove('attention'), 2000);
+    return;
+  }
+  saveUpload();
+  uploading = true;
+  try {
+    uploadStatus.textContent = 'WebM を作成中…';
+    const r = await makeWebm();
+    if (!r) { uploadStatus.textContent = ''; return; }
+    const who = document.getElementById('upName').value.trim().replace(/[\\/:*?"<>|\s]+/g, '_');
+    const name = `${who ? who + '_' : ''}${stamp()}_${r.frames}f_${r.fps}fps.webm`;
+    uploadStatus.textContent = `アップロード中…（${Math.ceil(r.blob.size / 1024)} KB）`;
+    // text/plain で送るとプリフライトが発生せず、Apps Script に直接 POST できる
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({ name, mimeType: 'video/webm', data: await blobToBase64(r.blob), password: document.getElementById('upPass').value }),
+    });
+    let data;
+    try { data = JSON.parse(await res.text()); }
+    catch (e) { throw new Error('Apps Script の応答を読めません（Code.gs を更新して再デプロイしたか確認してください）'); }
+    if (data.error) throw new Error(data.error);
+    uploadStatus.textContent = `アップロードしました: ${data.name}`;
+  } catch (err) {
+    uploadStatus.textContent = 'アップロードに失敗しました: ' + err.message;
+  } finally {
+    uploading = false;
+  }
 };
 
 // ---------- キーボード ----------

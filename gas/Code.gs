@@ -7,14 +7,22 @@
  *   3. 「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」
  *        次のユーザーとして実行: 自分
  *        アクセスできるユーザー: 全員
- *   4. 表示された「ウェブアプリの URL」（…/exec）を tiles.html に貼り付ける
+ *   4. 表示された「ウェブアプリの URL」（…/exec）を tiles.html / paint.html に貼り付ける
+ *   ※ このファイルを書き換えたら「デプロイを管理」→ 編集 → バージョン「新バージョン」で再デプロイ
  *
- * このスクリプトが返すのは FOLDER_ID のフォルダ直下にある動画ファイルだけです。
- * URL を知っている人は誰でもその動画を見られるので、共有範囲に注意してください。
+ * GET  … FOLDER_ID のフォルダ直下にある動画の一覧・中身を返す（tiles.html 用）
+ * POST … 動画を FOLDER_ID のフォルダに保存する（paint.html の「ドライブにアップロード」用）
+ * URL を知っている人は誰でも閲覧・アップロードできるので、必要なら UPLOAD_PASSWORD を設定してください。
  */
 
 // ↓ フォルダ URL「https://drive.google.com/drive/folders/XXXXXXXX」の XXXXXXXX 部分
 const FOLDER_ID = 'ここにフォルダIDを貼り付け';
+
+// アップロード用のパスワード（空なら誰でもアップロード可）。paint.html の「パスワード」欄に同じ値を入れる
+const UPLOAD_PASSWORD = '';
+
+// 1 ファイルの上限（MB）
+const MAX_UPLOAD_MB = 20;
 
 function doGet(e) {
   try {
@@ -52,6 +60,32 @@ function doGet(e) {
     }
     files.sort(function (a, b) { return a.name.localeCompare(b.name); });
     return json_({ folder: folder.getName(), files: files });
+  } catch (err) {
+    return json_({ error: String(err && err.message || err) });
+  }
+}
+
+function doPost(e) {
+  try {
+    const req = JSON.parse(e.postData.contents);
+    if (UPLOAD_PASSWORD && req.password !== UPLOAD_PASSWORD) {
+      return json_({ error: 'パスワードが違います' });
+    }
+    const mimeType = String(req.mimeType || '');
+    if (mimeType.indexOf('video/') !== 0) {
+      return json_({ error: '動画以外はアップロードできません' });
+    }
+    const bytes = Utilities.base64Decode(String(req.data || ''));
+    if (!bytes.length) return json_({ error: 'データが空です' });
+    if (bytes.length > MAX_UPLOAD_MB * 1024 * 1024) {
+      return json_({ error: 'ファイルが大きすぎます（上限 ' + MAX_UPLOAD_MB + ' MB）' });
+    }
+    // ファイル名に使えない文字を置き換える
+    let name = String(req.name || 'flipbook.webm').replace(/[\\/:*?"<>|\r\n]/g, '_').slice(0, 120);
+    if (!/\.webm$/i.test(name)) name += '.webm';
+
+    const file = DriveApp.getFolderById(FOLDER_ID).createFile(Utilities.newBlob(bytes, mimeType, name));
+    return json_({ ok: true, id: file.getId(), name: file.getName() });
   } catch (err) {
     return json_({ error: String(err && err.message || err) });
   }
