@@ -36,7 +36,7 @@
   .player-view { background: #000; border-radius: 6px; display: flex; align-items: center; justify-content: center; aspect-ratio: 320 / 360; }
   #playCanvas { max-width: 100%; max-height: 100%; }
   .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #2e323b; color: var(--muted); }
-  #fileInput, #bgInput { display: none; }
+  #fileInput, #bgInput, #videoInput { display: none; }
   .label { font-size: 14px; color: var(--muted); }
   .pager { margin: 0 0 10px; }
   .badge.page { font-size: 14px; padding: 6px 12px; color: var(--fg); }
@@ -91,11 +91,25 @@
       <label><input type="checkbox" id="showBg" checked> 背景を表示</label>
       <input type="file" id="bgInput" accept="image/*">
     </div>
+    <div class="controls">
+      <span class="label">動画:</span>
+      <button id="videoBtn">WebM 読込</button>
+      <label>読込先
+        <select id="videoLayer">
+          <option value="bg">背景（上からなぞれる）</option>
+          <option value="paint">絵（消しゴムで編集できる）</option>
+        </select>
+      </label>
+      <label>抽出 FPS <input type="number" id="videoFps" value="8" min="1" max="60"></label>
+      <span class="label" id="videoStatus"></span>
+      <input type="file" id="videoInput" accept="video/webm,video/*">
+    </div>
     <p class="hint">
       線は描き始めたコマの中だけに描かれ、隣のコマにははみ出しません。<br>
       各ページ 上段 1〜4 → 下段 5〜8、続けて次のページの順で再生されます（最大 5 ページ・40 コマ）。<br>
       ← → キーで編集するコマ、PageUp / PageDown でページを切り替えられます。<br>
-      背景は絵の下の別レイヤーなので、消しゴムで消えません。画像ファイルをコマにドラッグ＆ドロップしても背景になります。
+      背景は絵の下の別レイヤーなので、消しゴムで消えません。画像ファイルをコマにドラッグ＆ドロップしても背景になります。<br>
+      WebM は編集中のコマから順に、抽出 FPS の間隔でコマに分解して読み込みます（足りないページは自動追加、最大 40 コマ）。WebM をコマにドロップしても読み込めます。
     </p>
   </section>
 
@@ -356,13 +370,14 @@ function download(blob, name) {
 const showBg = () => document.getElementById('showBg').checked;
 document.getElementById('showBg').onchange = () => { dirty = true; };
 
-// 画像を指定したコマの背景レイヤーに描く
-function drawBg(page, cell, img) {
-  const g = page.bg.getContext('2d');
+// 画像（または動画の現在フレーム）を指定したコマに描く
+function drawFit(page, cell, img, layer = 'bg') {
+  const g = layerCtx(page, layer);
   const x = cellX(cell), y = cellY(cell);
+  const iw = img.videoWidth || img.width, ih = img.videoHeight || img.height;
   const fit = document.getElementById('bgFit').value;
-  const s = fit === 'cover' ? Math.max(SW / img.width, SH / img.height) : Math.min(SW / img.width, SH / img.height);
-  const w = img.width * s, h = img.height * s;
+  const s = fit === 'cover' ? Math.max(SW / iw, SH / ih) : Math.min(SW / iw, SH / ih);
+  const w = iw * s, h = ih * s;
   g.save();
   g.beginPath(); g.rect(x, y, SW, SH); g.clip();
   g.clearRect(x, y, SW, SH);
@@ -377,12 +392,12 @@ async function loadBg(file, target) {
   if (target === 'all') {
     pages.forEach(pg => {
       pushUndo('bg', pg);
-      for (let i = 0; i < N; i++) drawBg(pg, i, img);
+      for (let i = 0; i < N; i++) drawFit(pg, i, img);
     });
   } else {
     const cell = target === 'cell' ? active : target;
     pushUndo('bg');
-    drawBg(paint, cell, img);
+    drawFit(paint, cell, img);
     setActive(cell);
   }
   dirty = true;
@@ -399,13 +414,83 @@ document.getElementById('bgClearBtn').onclick = () => {
   dirty = true;
 };
 
-// 画像ファイルをコマにドロップするとそのコマの背景になる
+// 画像ファイルをコマにドロップするとそのコマの背景になる（動画ならそのコマから読み込む）
 sheet.addEventListener('dragover', e => e.preventDefault());
 sheet.addEventListener('drop', e => {
   e.preventDefault();
   const p = toSheet(e);
-  loadBg(e.dataTransfer.files[0], cellAt(p.x, p.y));
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  if (isVideo(file)) { setActive(cellAt(p.x, p.y)); loadVideo(file); }
+  else loadBg(file, cellAt(p.x, p.y));
 });
+
+// ---------- WebM 読込（フレームに分解してコマへ） ----------
+const MAX_FRAMES = MAX_PAGES * N;   // 40 コマ
+const videoStatus = document.getElementById('videoStatus');
+const isVideo = f => f.type.startsWith('video/') || /\.(webm|mp4|mov)$/i.test(f.name);
+const waitEvent = (el, name) => new Promise(r => el.addEventListener(name, r, { once: true }));
+
+async function seek(v, t) {
+  v.currentTime = t;
+  await waitEvent(v, 'seeked');
+}
+
+let videoBusy = false;
+async function loadVideo(file) {
+  if (!file || videoBusy) return;
+  const start = pageIdx * N + active;            // 通し番号で何コマ目から入れるか
+  const room = MAX_FRAMES - start;
+  if (room <= 0) return;
+  videoBusy = true;
+  const wasPlaying = playing;
+  stop();
+  const v = document.createElement('video');
+  v.muted = true; v.preload = 'auto'; v.playsInline = true;
+  v.src = URL.createObjectURL(file);
+  try {
+    videoStatus.textContent = '読み込み中…';
+    await new Promise((res, rej) => { v.onloadeddata = res; v.onerror = () => rej(new Error('この動画は読み込めません')); });
+    // MediaRecorder 製の WebM は長さが Infinity のことがあるので、末尾までシークして確定させる
+    if (!isFinite(v.duration)) {
+      v.currentTime = 1e101;
+      await Promise.race([waitEvent(v, 'durationchange'), waitEvent(v, 'seeked')]);
+      if (!isFinite(v.duration)) throw new Error('動画の長さを取得できませんでした');
+    }
+    const fps = Math.min(60, Math.max(1, Number(document.getElementById('videoFps').value) || 8));
+    const count = Math.min(room, Math.max(1, Math.floor(v.duration * fps + 1e-6)));
+    const layer = document.getElementById('videoLayer').value;
+
+    // 必要なページを追加し、上書きするページの履歴を保存
+    const lastPage = Math.floor((start + count - 1) / N);
+    while (pages.length <= lastPage) pages.push(newPage());
+    for (let pg = Math.floor(start / N); pg <= lastPage; pg++) pushUndo(layer, pages[pg]);
+
+    for (let k = 0; k < count; k++) {
+      // 各コマの区間の中央の時刻を取り出す
+      await seek(v, Math.min(v.duration - 0.001, (k + 0.5) / fps));
+      const g = start + k;
+      drawFit(pages[Math.floor(g / N)], g % N, v, layer);
+      videoStatus.textContent = `読み込み中… ${k + 1} / ${count}`;
+      dirty = true;
+    }
+    videoStatus.textContent = `${count} コマ読み込みました（${start + 1}〜${start + count}）`
+      + (count === room && v.duration * fps > room + 1e-6 ? '　※40 コマを超えた分は切り捨て' : '');
+    step = start; current = start;
+    updatePager();
+  } catch (err) {
+    videoStatus.textContent = '';
+    alert(err.message);
+  } finally {
+    URL.revokeObjectURL(v.src);
+    videoBusy = false;
+    if (wasPlaying) play(); else showFrame(current);
+  }
+}
+
+const videoInput = document.getElementById('videoInput');
+document.getElementById('videoBtn').onclick = () => videoInput.click();
+videoInput.onchange = () => { loadVideo(videoInput.files[0]); videoInput.value = ''; };
 
 // ---------- 表示（背景 + 作画レイヤー + オニオンスキン + ガイド） ----------
 function render() {
