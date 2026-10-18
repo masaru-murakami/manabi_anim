@@ -4,11 +4,14 @@
  * 使い方（README.md の「Apps Script」の項も参照）
  *   1. https://script.google.com/ で新しいプロジェクトを作り、このファイルの内容を貼り付ける
  *   2. 下の FOLDER_ID に、公開したいフォルダの ID を入れる
- *   3. 「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」
+ *   3. 上の関数選択で「checkSetup」を選んで「実行」→ 権限を承認する（ドライブの閲覧・作成）
+ *      ※ 承認しないと、アップロード時に「createFile を呼び出す権限がありません」となる
+ *   4. 「デプロイ」→「新しいデプロイ」→ 種類「ウェブアプリ」
  *        次のユーザーとして実行: 自分
  *        アクセスできるユーザー: 全員
- *   4. 表示された「ウェブアプリの URL」（…/exec）を tiles.html / paint.html に貼り付ける
- *   ※ このファイルを書き換えたら「デプロイを管理」→ 編集 → バージョン「新バージョン」で再デプロイ
+ *   5. 表示された「ウェブアプリの URL」（…/exec）を tiles.html / paint.html に貼り付ける
+ *   ※ このファイルを書き換えたら checkSetup を実行し直し、
+ *     「デプロイを管理」→ 編集 → バージョン「新バージョン」で再デプロイ
  *
  * GET  … FOLDER_ID のフォルダ直下にある動画の一覧・中身を返す（tiles.html 用）
  * POST … 動画を FOLDER_ID のフォルダに保存する（paint.html の「ドライブにアップロード」用）
@@ -101,6 +104,20 @@ function isInFolder_(file, folder) {
     if (parents.next().getId() === folder.getId()) return true;
   }
   return false;
+}
+
+/**
+ * エディタから実行する確認用の関数。
+ * 初回実行時に、このスクリプトが使う権限（ドライブの閲覧・ファイル作成）の承認画面が出る。
+ * 実行ログにフォルダ名と動画の数が出れば準備完了。
+ */
+function checkSetup() {
+  const folder = DriveApp.getFolderById(FOLDER_ID);
+  let count = 0;
+  const it = folder.getFiles();
+  while (it.hasNext()) if (isVideo_(it.next())) count++;
+  // ここまで動けば、承認画面で許可した権限（閲覧・ファイル作成）が有効になっている
+  Logger.log('フォルダ「%s」：動画 %s 本 / 準備 OK', folder.getName(), count);
 }
 
 function json_(obj) {

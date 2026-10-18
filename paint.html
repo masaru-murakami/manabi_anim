@@ -1159,7 +1159,13 @@ document.getElementById('uploadBtn').onclick = async () => {
       // 応答が読めなかった（Failed to fetch）。届いたかどうかをフォルダの一覧で確かめる
       data = await confirmUpload(url, name, req);
     }
-    if (data.error) throw new Error(data.error);
+    if (data.error) {
+      // 読み取り権限だけで承認されている場合の案内
+      if (/createFile|権限|permission/i.test(data.error)) {
+        throw new Error('Apps Script にファイル作成の権限がありません。Apps Script のエディタで関数「checkSetup」を実行して権限を承認し、「新バージョン」で再デプロイしてください。（' + data.error + '）');
+      }
+      throw new Error(data.error);
+    }
     uploadStatus.textContent = `アップロードしました: ${data.name}`;
   } catch (err) {
     uploadStatus.textContent = 'アップロードに失敗しました: ' + err.message;
