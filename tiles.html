@@ -60,6 +60,7 @@
   #drivePanel .status { font-size: 12px; color: var(--accent); }
   #drivePanel .note { margin: 0; font-size: 12px; color: var(--muted); }
   #driveToggle.on { border-color: var(--accent); }
+  #drivePanel [hidden] { display: none !important; }
 </style>
 </head>
 <body>
@@ -85,21 +86,37 @@
 
 <div id="drivePanel" hidden>
   <div class="row">
+    <label>接続方法
+      <select id="driveMode">
+        <option value="gas">Apps Script（API キー不要）</option>
+        <option value="key">API キー（公開フォルダ）</option>
+        <option value="oauth">Google ログイン（非公開フォルダ）</option>
+      </select>
+    </label>
+  </div>
+  <div class="row" data-mode="gas">
+    <label class="wide">Apps Script のウェブアプリ URL（…/exec）
+      <input type="text" id="gasUrl" placeholder="https://script.google.com/macros/s/xxxxxxxx/exec">
+    </label>
+  </div>
+  <div class="row" data-mode="key oauth">
     <label class="wide">フォルダ URL または ID
       <input type="text" id="driveFolder" placeholder="https://drive.google.com/drive/folders/xxxxxxxx">
     </label>
   </div>
-  <div class="row">
-    <label class="wide">API キー（フォルダを「リンクを知っている全員」に共有している場合）
+  <div class="row" data-mode="key">
+    <label class="wide">API キー（フォルダを「リンクを知っている全員」に共有）
       <input type="password" id="driveKey" placeholder="AIza..." autocomplete="off">
     </label>
-    <label class="wide">OAuth クライアント ID（非公開フォルダの場合・任意）
+  </div>
+  <div class="row" data-mode="oauth">
+    <label class="wide">OAuth クライアント ID（http://localhost などで開いたときのみ）
       <input type="text" id="driveClient" placeholder="xxxx.apps.googleusercontent.com">
     </label>
   </div>
   <div class="row">
     <button class="primary" id="driveLoad">フォルダを読み込む</button>
-    <button id="driveSignIn" title="OAuth クライアント ID を使って Google にログイン">Google でログイン</button>
+    <button id="driveSignIn" data-mode="oauth" title="OAuth クライアント ID を使って Google にログイン">Google でログイン</button>
     <label><input type="checkbox" id="driveAuto"> 自動更新
       <select id="driveInterval">
         <option value="15">15 秒</option><option value="30" selected>30 秒</option>
@@ -110,7 +127,7 @@
   </div>
   <p class="note">
     フォルダ内の動画（WebM など）を名前順に並べます。再読み込みすると新しく追加されたファイルだけを足します。
-    入力内容はこのブラウザにだけ保存されます。
+    入力内容はこのブラウザにだけ保存されます。Apps Script の準備方法は README.md を参照してください。
   </p>
 </div>
 
@@ -236,7 +253,7 @@ $('driveToggle').onclick = () => {
 };
 
 // 入力内容をこのブラウザに保存
-const SETTINGS = ['driveFolder', 'driveKey', 'driveClient', 'driveInterval'];
+const SETTINGS = ['driveMode', 'gasUrl', 'driveFolder', 'driveKey', 'driveClient', 'driveInterval'];
 try {
   const saved = JSON.parse(localStorage.getItem('tiles-drive') || '{}');
   SETTINGS.forEach(k => { if (saved[k]) $(k).value = saved[k]; });
@@ -245,6 +262,54 @@ function saveSettings() {
   try { localStorage.setItem('tiles-drive', JSON.stringify(Object.fromEntries(SETTINGS.map(k => [k, $(k).value])))); } catch (e) {}
 }
 SETTINGS.forEach(k => $(k).addEventListener('change', saveSettings));
+
+// 接続方法に応じて入力欄を出し分ける
+const mode = () => $('driveMode').value;
+function showModeFields() {
+  document.querySelectorAll('#drivePanel [data-mode]').forEach(el => {
+    el.hidden = !el.dataset.mode.split(' ').includes(mode());
+  });
+}
+$('driveMode').addEventListener('change', showModeFields);
+showModeFields();
+
+// Apps Script 中継（gas/Code.gs）への GET
+async function gasGet(params = {}) {
+  const base = $('gasUrl').value.trim();
+  if (!/^https:\/\/script\.google(usercontent)?\.com\//.test(base)) {
+    throw new Error('Apps Script のウェブアプリ URL（https://script.google.com/…/exec）を入力してください');
+  }
+  const qs = new URLSearchParams(params).toString();
+  const res = await fetch(base + (qs ? (base.includes('?') ? '&' : '?') + qs : ''));
+  if (!res.ok) throw new Error(`${res.status}`);
+  let data;
+  try { data = JSON.parse(await res.text()); }
+  catch (e) { throw new Error('Apps Script の応答を読めません（デプロイの「アクセスできるユーザー」が「全員」か確認してください）'); }
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+function base64ToBlob(b64, type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Blob([bytes], { type: type || 'video/webm' });
+}
+
+// 接続方法ごとの一覧取得 / ダウンロード
+async function listDriveFiles() {
+  if (mode() === 'gas') return (await gasGet()).files;
+  const id = folderId();
+  if (!id) throw new Error('フォルダ URL または ID を入力してください');
+  if (mode() === 'oauth' && !accessToken) throw new Error('先に「Google でログイン」してください');
+  return listFolder(id);
+}
+async function downloadDriveFile(f) {
+  if (mode() === 'gas') {
+    const d = await gasGet({ id: f.id });
+    return base64ToBlob(d.data, d.mimeType);
+  }
+  return (await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).blob();
+}
 
 function folderId() {
   const v = $('driveFolder').value.trim();
@@ -255,7 +320,7 @@ function folderId() {
 // ログイン済みならトークン、そうでなければ API キーで認証
 async function driveFetch(url) {
   const headers = {};
-  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  if (mode() === 'oauth' && accessToken) headers.Authorization = `Bearer ${accessToken}`;
   else if ($('driveKey').value.trim()) url += `${url.includes('?') ? '&' : '?'}key=${encodeURIComponent($('driveKey').value.trim())}`;
   else throw new Error('API キーを入力するか、Google でログインしてください');
   const res = await fetch(url, { headers });
@@ -288,17 +353,15 @@ async function listFolder(id) {
 
 async function loadDrive() {
   if (driveBusy) return;
-  const id = folderId();
-  if (!id) { driveStatus.textContent = 'フォルダ URL または ID を入力してください'; return; }
   saveSettings();
   driveBusy = true;
   try {
     driveStatus.textContent = 'フォルダを確認中…';
-    const files = (await listFolder(id)).filter(f => !driveLoaded.has(f.id));
+    const files = (await listDriveFiles()).filter(f => !driveLoaded.has(f.id));
     let n = 0;
     for (const f of files) {
       driveStatus.textContent = `ダウンロード中… ${++n} / ${files.length}　${f.name}`;
-      const blob = await (await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).blob();
+      const blob = await downloadDriveFile(f);
       driveLoaded.add(f.id);
       addTile(f.name, URL.createObjectURL(blob), () => driveLoaded.add(f.id));
       update();
