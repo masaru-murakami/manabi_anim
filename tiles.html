@@ -51,12 +51,22 @@
   }
   body.dragover #empty, body.dragover #grid { outline: 3px dashed var(--accent); outline-offset: -8px; }
   body.fullview header { display: none; }
+  #drivePanel { background: var(--panel); border-bottom: 1px solid var(--line); padding: 12px 20px; }
+  #drivePanel .row { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; margin-bottom: 10px; }
+  #drivePanel label.wide { flex: 1 1 320px; flex-direction: column; align-items: stretch; gap: 4px; font-size: 12px; color: var(--muted); }
+  #drivePanel input[type=text], #drivePanel input[type=password] {
+    background: #2e323b; color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 7px 10px; font-size: 14px;
+  }
+  #drivePanel .status { font-size: 12px; color: var(--accent); }
+  #drivePanel .note { margin: 0; font-size: 12px; color: var(--muted); }
+  #driveToggle.on { border-color: var(--accent); }
 </style>
 </head>
 <body>
 <header>
   <h1>パラパラ タイル再生</h1>
   <button class="primary" id="addBtn">WebM を追加</button>
+  <button id="driveToggle" title="Google ドライブのフォルダから読み込む">☁ Google ドライブ</button>
   <input type="file" id="fileInput" accept="video/webm,video/*" multiple>
   <button id="playBtn">⏸ 一時停止 (Space)</button>
   <button id="syncBtn" title="全タイルを先頭から同時に再生">頭出し同期 (R)</button>
@@ -72,6 +82,37 @@
   <button id="clearBtn">全削除</button>
   <span class="info" id="info">0 本</span>
 </header>
+
+<div id="drivePanel" hidden>
+  <div class="row">
+    <label class="wide">フォルダ URL または ID
+      <input type="text" id="driveFolder" placeholder="https://drive.google.com/drive/folders/xxxxxxxx">
+    </label>
+  </div>
+  <div class="row">
+    <label class="wide">API キー（フォルダを「リンクを知っている全員」に共有している場合）
+      <input type="password" id="driveKey" placeholder="AIza..." autocomplete="off">
+    </label>
+    <label class="wide">OAuth クライアント ID（非公開フォルダの場合・任意）
+      <input type="text" id="driveClient" placeholder="xxxx.apps.googleusercontent.com">
+    </label>
+  </div>
+  <div class="row">
+    <button class="primary" id="driveLoad">フォルダを読み込む</button>
+    <button id="driveSignIn" title="OAuth クライアント ID を使って Google にログイン">Google でログイン</button>
+    <label><input type="checkbox" id="driveAuto"> 自動更新
+      <select id="driveInterval">
+        <option value="15">15 秒</option><option value="30" selected>30 秒</option>
+        <option value="60">1 分</option><option value="300">5 分</option>
+      </select>
+    </label>
+    <span class="status" id="driveStatus"></span>
+  </div>
+  <p class="note">
+    フォルダ内の動画（WebM など）を名前順に並べます。再読み込みすると新しく追加されたファイルだけを足します。
+    入力内容はこのブラウザにだけ保存されます。
+  </p>
+</div>
 
 <div id="empty">
   ここに WebM ファイルをドラッグ＆ドロップ<br>
@@ -91,26 +132,33 @@ const videos = () => [...grid.querySelectorAll('video')];
 function addFiles(files) {
   for (const file of files) {
     if (!file.type.startsWith('video/') && !/\.webm$/i.test(file.name)) continue;
+    addTile(file.name, URL.createObjectURL(file));
+  }
+  update();
+}
+
+// onRemove: × で消したときに呼ばれる（ドライブのファイルを再表示しないため）
+function addTile(fileName, url, onRemove) {
+  {
     const tile = document.createElement('div');
     tile.className = 'tile';
 
     const v = document.createElement('video');
-    v.src = URL.createObjectURL(file);
+    v.src = url;
     v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = !paused;
     // MediaRecorder 製の WebM は長さ情報が無く loop が効かない場合があるので保険
     v.addEventListener('ended', () => { v.currentTime = 0; if (!paused) v.play(); });
 
     const name = document.createElement('div');
-    name.className = 'name'; name.textContent = file.name;
+    name.className = 'name'; name.textContent = fileName;
 
     const del = document.createElement('button');
     del.className = 'del'; del.textContent = '×'; del.title = '削除';
-    del.onclick = () => { URL.revokeObjectURL(v.src); tile.remove(); update(); };
+    del.onclick = () => { URL.revokeObjectURL(v.src); tile.remove(); if (onRemove) onRemove(); update(); };
 
     tile.append(v, name, del);
     grid.appendChild(tile);
   }
-  update();
 }
 
 function update() {
@@ -148,7 +196,7 @@ document.getElementById('syncBtn').onclick = syncAll;
 document.getElementById('clearBtn').onclick = () => {
   if (!videos().length || !confirm('すべて削除しますか？')) return;
   videos().forEach(v => URL.revokeObjectURL(v.src));
-  grid.innerHTML = ''; update();
+  grid.innerHTML = ''; driveLoaded.clear(); update();
 };
 
 // ---------- 表示設定 ----------
@@ -174,6 +222,143 @@ document.addEventListener('keydown', e => {
   else if (e.code === 'KeyR') syncAll();
   else if (e.code === 'KeyF') toggleFull();
 });
+
+// ---------- Google ドライブ ----------
+const $ = id => document.getElementById(id);
+const driveStatus = $('driveStatus');
+const driveLoaded = new Set();     // 読み込み済み（または × で消した）ファイル ID
+let accessToken = null, tokenClient = null, autoTimer = null, driveBusy = false;
+
+$('driveToggle').onclick = () => {
+  const panel = $('drivePanel');
+  panel.hidden = !panel.hidden;
+  $('driveToggle').classList.toggle('on', !panel.hidden);
+};
+
+// 入力内容をこのブラウザに保存
+const SETTINGS = ['driveFolder', 'driveKey', 'driveClient', 'driveInterval'];
+try {
+  const saved = JSON.parse(localStorage.getItem('tiles-drive') || '{}');
+  SETTINGS.forEach(k => { if (saved[k]) $(k).value = saved[k]; });
+} catch (e) {}
+function saveSettings() {
+  try { localStorage.setItem('tiles-drive', JSON.stringify(Object.fromEntries(SETTINGS.map(k => [k, $(k).value])))); } catch (e) {}
+}
+SETTINGS.forEach(k => $(k).addEventListener('change', saveSettings));
+
+function folderId() {
+  const v = $('driveFolder').value.trim();
+  const m = v.match(/folders\/([\w-]+)/) || v.match(/[?&]id=([\w-]+)/);
+  return m ? m[1] : v;
+}
+
+// ログイン済みならトークン、そうでなければ API キーで認証
+async function driveFetch(url) {
+  const headers = {};
+  if (accessToken) headers.Authorization = `Bearer ${accessToken}`;
+  else if ($('driveKey').value.trim()) url += `${url.includes('?') ? '&' : '?'}key=${encodeURIComponent($('driveKey').value.trim())}`;
+  else throw new Error('API キーを入力するか、Google でログインしてください');
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let msg = `${res.status}`;
+    try { msg += ' ' + (await res.json()).error.message; } catch (e) {}
+    if (res.status === 401) accessToken = null;
+    throw new Error(msg);
+  }
+  return res;
+}
+
+async function listFolder(id) {
+  const q = `'${id}' in parents and trashed = false and (mimeType contains 'video/' or name contains '.webm')`;
+  const files = [];
+  let pageToken = '';
+  do {
+    const url = 'https://www.googleapis.com/drive/v3/files?' + new URLSearchParams({
+      q, orderBy: 'name', pageSize: '1000',
+      fields: 'nextPageToken, files(id, name, mimeType)',
+      supportsAllDrives: 'true', includeItemsFromAllDrives: 'true',
+      ...(pageToken ? { pageToken } : {}),
+    });
+    const data = await (await driveFetch(url)).json();
+    files.push(...data.files);
+    pageToken = data.nextPageToken;
+  } while (pageToken);
+  return files;
+}
+
+async function loadDrive() {
+  if (driveBusy) return;
+  const id = folderId();
+  if (!id) { driveStatus.textContent = 'フォルダ URL または ID を入力してください'; return; }
+  saveSettings();
+  driveBusy = true;
+  try {
+    driveStatus.textContent = 'フォルダを確認中…';
+    const files = (await listFolder(id)).filter(f => !driveLoaded.has(f.id));
+    let n = 0;
+    for (const f of files) {
+      driveStatus.textContent = `ダウンロード中… ${++n} / ${files.length}　${f.name}`;
+      const blob = await (await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&supportsAllDrives=true`)).blob();
+      driveLoaded.add(f.id);
+      addTile(f.name, URL.createObjectURL(blob), () => driveLoaded.add(f.id));
+      update();
+    }
+    driveStatus.textContent = files.length
+      ? `${files.length} 本追加しました（${new Date().toLocaleTimeString()}）`
+      : `新しいファイルはありません（${new Date().toLocaleTimeString()}）`;
+    if (files.length && !paused) syncAll();
+  } catch (err) {
+    driveStatus.textContent = '読み込みに失敗しました: ' + err.message;
+  } finally {
+    driveBusy = false;
+  }
+}
+$('driveLoad').onclick = loadDrive;
+
+// 非公開フォルダ用：Google Identity Services でログイン（http(s) で開いたときのみ）
+function loadGis() {
+  if (window.google?.accounts?.oauth2) return Promise.resolve();
+  return new Promise((res, rej) => {
+    const sc = document.createElement('script');
+    sc.src = 'https://accounts.google.com/gsi/client';
+    sc.onload = res; sc.onerror = () => rej(new Error('Google ログイン用スクリプトを読み込めません'));
+    document.head.appendChild(sc);
+  });
+}
+$('driveSignIn').onclick = async () => {
+  const clientId = $('driveClient').value.trim();
+  if (!clientId) { driveStatus.textContent = 'OAuth クライアント ID を入力してください'; return; }
+  if (location.protocol === 'file:') {
+    driveStatus.textContent = 'ログインは http://localhost などで開いたときのみ使えます（file:// 不可）';
+    return;
+  }
+  saveSettings();
+  try {
+    await loadGis();
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: clientId,
+      scope: 'https://www.googleapis.com/auth/drive.readonly',
+      callback: r => {
+        if (r.error) { driveStatus.textContent = 'ログインに失敗しました: ' + r.error; return; }
+        accessToken = r.access_token;
+        $('driveSignIn').textContent = 'ログイン済み';
+        driveStatus.textContent = 'ログインしました';
+        loadDrive();
+      },
+    });
+    tokenClient.requestAccessToken();
+  } catch (err) {
+    driveStatus.textContent = err.message;
+  }
+};
+
+// 自動更新（新しく追加されたファイルを定期的に取り込む）
+function setAuto() {
+  clearInterval(autoTimer); autoTimer = null;
+  if ($('driveAuto').checked) autoTimer = setInterval(loadDrive, Number($('driveInterval').value) * 1000);
+}
+$('driveAuto').onchange = () => { setAuto(); if ($('driveAuto').checked) loadDrive(); };
+$('driveInterval').addEventListener('change', setAuto);
 
 update();
 </script>
