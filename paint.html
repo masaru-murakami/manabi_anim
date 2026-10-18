@@ -133,6 +133,7 @@
       <button id="playBtn" class="primary">■ 停止 (Enter)</button>
       <label>FPS <input type="number" id="fps" value="8" min="1" max="60"></label>
       <label><input type="checkbox" id="pingpong"> 往復</label>
+      <label><input type="checkbox" id="skipEmpty" checked> 空のコマを飛ばす</label>
       <button id="saveBtn">WebM 保存</button>
     </div>
   </section>
@@ -184,6 +185,8 @@ function newPage() {
   c.bg.width = W; c.bg.height = H;
   c.bg.getContext('2d', { willReadFrequently: true });
   c.undo = []; c.redo = [];  // 元に戻す履歴はページごと
+  c.ver = 0;                 // 内容が変わるたびに増える（空コマ判定のキャッシュ用）
+  c.cache = { ver: -1 };
   return c;
 }
 
@@ -236,6 +239,7 @@ function swapHistory(from, to) {
   const g = layerCtx(paint, e.layer);
   to.push({ layer: e.layer, data: g.getImageData(0, 0, W, H) });
   g.putImageData(e.data, 0, 0);
+  touch();
   dirty = true;
 }
 const undo = () => swapHistory(paint.undo, paint.redo);
@@ -295,6 +299,7 @@ function drawSeg(from, to, w) {
   ctx.lineTo(to.x + 0.01, to.y);
   ctx.stroke();
   ctx.restore();
+  touch();
   dirty = true;
 }
 
@@ -323,6 +328,7 @@ sheet.addEventListener('pointercancel', endStroke);
 // ---------- コマ操作 ----------
 function clearCell(i) {
   ctx.clearRect(cellX(i), cellY(i), SW, SH);
+  touch();
   dirty = true;
 }
 document.getElementById('clearCellBtn').onclick = () => { pushUndo(); clearCell(active); };
@@ -343,6 +349,7 @@ function copyPrev() {
   if (!p) return;
   pushUndo();
   ctx.drawImage(p.page, cellX(p.cell), cellY(p.cell), SW, SH, cellX(active), cellY(active), SW, SH);
+  touch();
   dirty = true;
 }
 document.getElementById('copyPrevBtn').onclick = copyPrev;
@@ -359,6 +366,7 @@ fileInput.onchange = async () => {
   ctx.clearRect(0, 0, W, H);
   const s = Math.min(W / img.width, H / img.height);
   ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+  touch();
   dirty = true;
 };
 
@@ -388,6 +396,7 @@ function drawFit(page, cell, img, layer = 'bg', flip = false) {
   const g = layerCtx(page, layer);
   g.clearRect(cellX(cell), cellY(cell), SW, SH);
   fitInto(g, cell, img, flip);
+  touch(page);
 }
 // コマの枠内に合わせ方（埋める / 収める）に従って描く
 function fitInto(g, cell, img, flip = false) {
@@ -429,6 +438,7 @@ bgInput.onchange = () => { loadBg(bgInput.files[0], bgTarget); bgInput.value = '
 document.getElementById('bgClearBtn').onclick = () => {
   pushUndo('bg');
   paint.bg.getContext('2d').clearRect(cellX(active), cellY(active), SW, SH);
+  touch();
   dirty = true;
 };
 
@@ -644,26 +654,66 @@ function loop() {
 requestAnimationFrame(loop);
 
 // ---------- パラパラ再生（全ページ通し） ----------
-function showFrame(g) {
+// ---------- 空のコマ判定 ----------
+function touch(page = paint) { page.ver++; }
+
+// コマ内に不透明なピクセルが 1 つでもあるか（消しゴムの消え残り程度は無視）
+function cellsFilled(layer) {
+  const d = layer.getContext('2d').getImageData(0, 0, W, H).data;
+  const res = [];
+  for (let i = 0; i < N; i++) {
+    const x0 = cellX(i), y0 = cellY(i);
+    let found = false;
+    for (let y = y0; y < y0 + SH && !found; y++) {
+      for (let x = x0, o = (y * W + x0) * 4 + 3; x < x0 + SW; x++, o += 4) {
+        if (d[o] > 8) { found = true; break; }
+      }
+    }
+    res.push(found);
+  }
+  return res;
+}
+function hasContent(g) {
+  const page = pages[Math.floor(g / N)], cell = g % N;
+  if (page.cache.ver !== page.ver) {
+    page.cache = { ver: page.ver, paint: cellsFilled(page), bg: cellsFilled(page.bg) };
+  }
+  return page.cache.paint[cell] || (showBg() && page.cache.bg[cell]);
+}
+// 再生するコマの通し番号の一覧
+function playlist() {
+  const all = [...Array(total()).keys()];
+  return document.getElementById('skipEmpty').checked ? all.filter(hasContent) : all;
+}
+
+function showFrame(g, list = playlist()) {
   g = Math.min(g, total() - 1);
   current = g;
   const page = pages[Math.floor(g / N)], cell = g % N;
   pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, SW, SH);
   if (showBg()) pctx.drawImage(page.bg, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
   pctx.drawImage(page, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
-  frameNoEl.textContent = `${g + 1} / ${total()}`;
-  framePageEl.textContent = `P${Math.floor(g / N) + 1}`;
+  const pos = list.indexOf(g);
+  frameNoEl.textContent = pos >= 0 ? `${pos + 1} / ${list.length}` : `- / ${list.length}`;
+  framePageEl.textContent = `P${Math.floor(g / N) + 1} - ${cell + 1}`;
   dirty = true;
 }
-function indexAt(s) {
-  const T = total();
+function indexAt(s, T) {
+  if (T <= 1) return 0;
   if (!document.getElementById('pingpong').checked) return s % T;
   const p = s % (2 * T - 2);
   return p < T ? p : 2 * T - 2 - p;
 }
 function tick() {
   if (!playing) return;
-  showFrame(indexAt(step++));
+  const list = playlist();
+  if (list.length) {
+    showFrame(list[indexAt(step++, list.length)], list);
+  } else {
+    pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, SW, SH);
+    frameNoEl.textContent = '0 / 0';
+    framePageEl.textContent = '描かれたコマなし';
+  }
   playTimer = setTimeout(tick, 1000 / getFps());
 }
 function play() {
@@ -690,10 +740,12 @@ document.getElementById('saveBtn').onclick = async () => {
   rec.ondataavailable = e => chunks.push(e.data);
   const done = new Promise(r => rec.onstop = r);
   rec.start();
-  const T = total();
-  const len = document.getElementById('pingpong').checked ? 2 * T - 2 : T;
+  const list = playlist();
+  if (!list.length) { alert('描かれたコマがありません'); if (wasPlaying) play(); return; }
+  const T = list.length;
+  const len = document.getElementById('pingpong').checked && T > 1 ? 2 * T - 2 : T;
   for (let s = 0; s < len * 2; s++) {
-    showFrame(indexAt(s));
+    showFrame(list[indexAt(s, T)], list);
     await new Promise(r => setTimeout(r, 1000 / fps));
   }
   rec.stop();
