@@ -134,7 +134,7 @@
       <button id="playBtn" class="primary">■ 停止 (Enter)</button>
       <label>FPS <input type="number" id="fps" value="8" min="1" max="60"></label>
       <label><input type="checkbox" id="pingpong"> 往復</label>
-      <label><input type="checkbox" id="skipEmpty" checked> 空のコマを飛ばす</label>
+      <label><input type="checkbox" id="skipEmpty" checked> 最後に描いたコマまで再生</label>
       <button id="saveBtn">WebM 保存</button>
     </div>
   </section>
@@ -692,9 +692,13 @@ function hasContent(g) {
   return page.cache.paint[cell] || (showBg() && page.cache.bg[cell]);
 }
 // 再生するコマの通し番号の一覧
-function playlist(skipEmpty = document.getElementById('skipEmpty').checked) {
-  const all = [...Array(total()).keys()];
-  return skipEmpty ? all.filter(hasContent) : all;
+// trim = true なら 1 コマ目から最後に描いたコマまで（途中の空のコマも含める）
+function playlist(trim = document.getElementById('skipEmpty').checked) {
+  let n = total();
+  if (trim) {
+    while (n > 0 && !hasContent(n - 1)) n--;
+  }
+  return [...Array(n).keys()];
 }
 
 function showFrame(g, list = playlist()) {
@@ -751,9 +755,7 @@ document.getElementById('saveBtn').onclick = async () => {
   rec.ondataavailable = e => chunks.push(e.data);
   const done = new Promise(r => rec.onstop = r);
   rec.start();
-  // 書き出しは 1 コマ目から、描いてある最後のコマまで（途中の空のコマも含める）
-  const drawn = playlist(true);
-  const list = drawn.length ? [...Array(drawn[drawn.length - 1] + 1).keys()] : [];
+  const list = playlist(true);   // 書き出しは常に 1 コマ目から最後に描いたコマまで
   if (!list.length) { alert('描かれたコマがありません'); if (wasPlaying) play(); return; }
   const T = list.length;
   const len = document.getElementById('pingpong').checked && T > 1 ? 2 * T - 2 : T;
