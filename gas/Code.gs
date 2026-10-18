@@ -107,17 +107,32 @@ function isInFolder_(file, folder) {
 }
 
 /**
- * エディタから実行する確認用の関数。
- * 初回実行時に、このスクリプトが使う権限（ドライブの閲覧・ファイル作成）の承認画面が出る。
- * 実行ログにフォルダ名と動画の数が出れば準備完了。
+ * エディタから実行する確認用の関数（関数選択で「checkSetup」を選んで「実行」）。
+ * - 権限の承認画面が出たら、ドライブの項目を含め「すべて選択」してから「続行」すること
+ * - 実際にフォルダへ確認用ファイルを作り、すぐゴミ箱へ移して、アップロードできるかを確かめる
+ * 実行ログに「準備 OK」と出れば完了。その後「新バージョン」で再デプロイする。
  */
 function checkSetup() {
+  // 承認画面で一部の権限しか許可されていないと、ここで承認を求め直す
+  if (ScriptApp.requireAllScopes) ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
+
   const folder = DriveApp.getFolderById(FOLDER_ID);
   let count = 0;
   const it = folder.getFiles();
   while (it.hasNext()) if (isVideo_(it.next())) count++;
-  // ここまで動けば、承認画面で許可した権限（閲覧・ファイル作成）が有効になっている
-  Logger.log('フォルダ「%s」：動画 %s 本 / 準備 OK', folder.getName(), count);
+  Logger.log('フォルダ「%s」を読めました（動画 %s 本）', folder.getName(), count);
+
+  // 書き込みの確認（作ったファイルはすぐゴミ箱へ）
+  try {
+    const tmp = folder.createFile('_upload_check.txt', 'ok');
+    tmp.setTrashed(true);
+  } catch (err) {
+    Logger.log('ファイルを作成できません: %s', err.message);
+    Logger.log('→ https://myaccount.google.com/permissions でこのプロジェクトのアクセス権を削除し、'
+      + 'もう一度 checkSetup を実行して、承認画面で「すべて選択」してください');
+    return;
+  }
+  Logger.log('準備 OK（アップロードできます）。「デプロイを管理」→ 編集 →「新バージョン」で再デプロイしてください');
 }
 
 function json_(obj) {

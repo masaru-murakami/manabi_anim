@@ -60,6 +60,10 @@ Google アカウントだけで使えます。Google Cloud Console の設定は�
 - 誰でもアップロードできるのを防ぎたいときは、`Code.gs` の `UPLOAD_PASSWORD` を設定し、paint.html の「パスワード」欄に同じ値を入れます。
 - 以前に Code.gs をデプロイ済みの場合は、新しい Code.gs を貼り付け、**`checkSetup` を実行して権限を承認し直してから**「新バージョン」で再デプロイしてください。
   - これをしないと「DriveApp.Folder.createFile を呼び出す権限がありません」と表示されます。
+- それでも同じエラーが出る場合（承認画面でドライブの項目にチェックを付けなかった等）：
+  1. [Google アカウントのアクセス権](https://myaccount.google.com/permissions) で、この Apps Script プロジェクトを選んで「アクセス権を削除」
+  2. エディタで `checkSetup` を実行し、承認画面で **「すべて選択」** にチェックしてから「続行」
+  3. 実行ログに「準備 OK」と出たら、「新バージョン」で再デプロイ
 
 ### B. API キー（公開フォルダ）
 
