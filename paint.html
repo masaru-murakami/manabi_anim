@@ -692,9 +692,9 @@ function hasContent(g) {
   return page.cache.paint[cell] || (showBg() && page.cache.bg[cell]);
 }
 // 再生するコマの通し番号の一覧
-function playlist() {
+function playlist(skipEmpty = document.getElementById('skipEmpty').checked) {
   const all = [...Array(total()).keys()];
-  return document.getElementById('skipEmpty').checked ? all.filter(hasContent) : all;
+  return skipEmpty ? all.filter(hasContent) : all;
 }
 
 function showFrame(g, list = playlist()) {
@@ -741,7 +741,7 @@ playBtn.onclick = () => playing ? stop() : play();
 // 停止中は作画内容の変化を再生側にも反映
 setInterval(() => { if (!playing) showFrame(current); }, 100);
 
-// ---------- WebM 保存（全ページ 2 周分） ----------
+// ---------- WebM 保存（描いたコマだけを 2 周分） ----------
 document.getElementById('saveBtn').onclick = async () => {
   const wasPlaying = playing;
   stop();
@@ -751,7 +751,7 @@ document.getElementById('saveBtn').onclick = async () => {
   rec.ondataavailable = e => chunks.push(e.data);
   const done = new Promise(r => rec.onstop = r);
   rec.start();
-  const list = playlist();
+  const list = playlist(true);   // 書き出しは「空のコマを飛ばす」の設定に関係なく、描いたコマだけ
   if (!list.length) { alert('描かれたコマがありません'); if (wasPlaying) play(); return; }
   const T = list.length;
   const len = document.getElementById('pingpong').checked && T > 1 ? 2 * T - 2 : T;
