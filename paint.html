@@ -76,6 +76,21 @@
   .help table { font-size: 13px; border-collapse: collapse; }
   .help td { padding: 3px 14px 3px 0; color: var(--muted); }
   kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: #2e323b; color: var(--fg); font-size: 12px; font-family: inherit; }
+  /* ---- コマ一覧 ---- */
+  .strip-head { margin-top: 12px; }
+  .strip { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; padding: 6px; background: #1b1d22; border-radius: 8px; }
+  .strip { gap: 8px 14px; }
+  .strip .pgroup { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; max-width: 100%; }
+  .strip .pg { font-size: 11px; color: var(--muted); padding-right: 2px; }
+  .strip .th { position: relative; line-height: 0; border: 2px solid transparent; border-radius: 4px; cursor: grab; }
+  .strip .th canvas { width: 48px; height: 54px; border-radius: 2px; background: #fff; }
+  .strip .th .n { position: absolute; left: 2px; bottom: 2px; font-size: 10px; line-height: 1; padding: 1px 3px; border-radius: 3px; background: rgba(0,0,0,.55); color: #fff; }
+  .strip .th.empty canvas { opacity: .45; }
+  .strip .th.active { border-color: var(--accent); }
+  .strip .th.playing { box-shadow: 0 0 0 2px rgba(30,136,229,.8); }
+  .strip .th.dragging { opacity: .3; }
+  .strip .th.drop-before { box-shadow: -5px 0 0 -1px var(--accent); }
+  .strip .th.drop-after { box-shadow: 5px 0 0 -1px var(--accent); }
 </style>
 </head>
 <body>
@@ -117,6 +132,14 @@
         <button id="redoBtn" title="やり直し (Ctrl+Y)">↷ やり直し</button>
       </div>
     </div>
+
+    <div class="bar strip-head">
+      <span class="label">🎞 コマ一覧（ドラッグで並べ替え・クリックで選択）</span>
+      <span class="grow"></span>
+      <button id="moveLeftBtn" title="編集中のコマを 1 つ前へ (Alt+←)">◀ 前へ移動</button>
+      <button id="moveRightBtn" title="編集中のコマを 1 つ後ろへ (Alt+→)">後ろへ移動 ▶</button>
+    </div>
+    <div class="strip" id="strip"></div>
   </section>
 
   <!-- ===== 再生エリア ===== -->
@@ -246,6 +269,7 @@
         <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>編集するコマを移動</td></tr>
         <tr><td><kbd>PageUp</kbd> <kbd>PageDown</kbd></td><td>ページ移動</td></tr>
         <tr><td><kbd>C</kbd></td><td>前のコマを複製</td></tr>
+        <tr><td><kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>編集中のコマを前 / 後ろへ移動</td></tr>
         <tr><td><kbd>Space</kbd></td><td>撮影（カメラ開始中）</td></tr>
         <tr><td><kbd>Enter</kbd></td><td>再生 / 停止</td></tr>
       </table>
@@ -342,17 +366,18 @@ document.getElementById('delPageBtn').onclick = deletePage;
 // ---------- 元に戻す / やり直し ----------
 const MAX_UNDO = 30;
 const layerCtx = (page, layer) => (layer === 'bg' ? page.bg : page).getContext('2d');
+// layer: 'paint' / 'bg' / 'both'（並べ替えなど両方のレイヤーを同時に変える操作）
 function pushUndo(layer = 'paint', page = paint) {
-  page.undo.push({ layer, data: layerCtx(page, layer).getImageData(0, 0, W, H) });
+  const layers = layer === 'both' ? ['paint', 'bg'] : [layer];
+  page.undo.push({ layers, data: layers.map(l => layerCtx(page, l).getImageData(0, 0, W, H)) });
   if (page.undo.length > MAX_UNDO) page.undo.shift();
   page.redo.length = 0;
 }
 function swapHistory(from, to) {
   if (!from.length) return;
   const e = from.pop();
-  const g = layerCtx(paint, e.layer);
-  to.push({ layer: e.layer, data: g.getImageData(0, 0, W, H) });
-  g.putImageData(e.data, 0, 0);
+  to.push({ layers: e.layers, data: e.layers.map(l => layerCtx(paint, l).getImageData(0, 0, W, H)) });
+  e.layers.forEach((l, k) => layerCtx(paint, l).putImageData(e.data[k], 0, 0));
   touch();
   dirty = true;
 }
@@ -773,6 +798,106 @@ function render() {
     sctx.fillText(`${i + 1}  (${pageIdx * N + i + 1})`, cellX(i) + 10, cellY(i) + 28);
   }
 }
+// ---------- コマの並べ替え ----------
+const cellOf = g => ({ page: pages[Math.floor(g / N)], cell: g % N });
+function getFrame(g) {
+  const { page, cell } = cellOf(g);
+  return ['paint', 'bg'].map(l => layerCtx(page, l).getImageData(cellX(cell), cellY(cell), SW, SH));
+}
+function putFrame(g, f) {
+  const { page, cell } = cellOf(g);
+  ['paint', 'bg'].forEach((l, k) => layerCtx(page, l).putImageData(f[k], cellX(cell), cellY(cell)));
+  touch(page);
+}
+// 通し番号 from のコマを to の位置へ移動（間のコマは 1 つずつずれる）
+function moveFrame(from, to) {
+  to = Math.max(0, Math.min(total() - 1, to));
+  if (from === to) return;
+  const lo = Math.min(from, to), hi = Math.max(from, to);
+  for (let pg = Math.floor(lo / N); pg <= Math.floor(hi / N); pg++) pushUndo('both', pages[pg]);
+  const frames = [];
+  for (let g = lo; g <= hi; g++) frames.push(getFrame(g));
+  const [m] = frames.splice(from - lo, 1);
+  frames.splice(to - lo, 0, m);
+  frames.forEach((f, k) => putFrame(lo + k, f));
+  goFrame(to);
+}
+function goFrame(g) {
+  active = g % N;
+  goPage(Math.floor(g / N));
+}
+const moveActive = d => moveFrame(pageIdx * N + active, pageIdx * N + active + d);
+document.getElementById('moveLeftBtn').onclick = () => moveActive(-1);
+document.getElementById('moveRightBtn').onclick = () => moveActive(1);
+
+// コマ一覧（サムネイル）
+const stripEl = document.getElementById('strip');
+let stripKey = '', dragFrom = null;
+function clearDropMarks() {
+  stripEl.querySelectorAll('.drop-before, .drop-after').forEach(el => el.classList.remove('drop-before', 'drop-after'));
+}
+function buildStrip() {
+  stripEl.innerHTML = '';
+  let group = null;            // ページごとにまとめて、ページ単位で折り返す
+  for (let g = 0; g < total(); g++) {
+    if (g % N === 0) {
+      group = document.createElement('div');
+      group.className = 'pgroup';
+      const pg = document.createElement('span');
+      pg.className = 'pg'; pg.textContent = `P${g / N + 1}`;
+      group.appendChild(pg);
+      stripEl.appendChild(group);
+    }
+    const th = document.createElement('div');
+    th.className = 'th'; th.draggable = true; th.dataset.g = g;
+    const c = document.createElement('canvas');
+    c.width = SW / 4; c.height = SH / 4;
+    const n = document.createElement('span');
+    n.className = 'n'; n.textContent = g + 1;
+    th.append(c, n);
+    th.onclick = () => goFrame(g);
+    th.addEventListener('dragstart', e => { dragFrom = g; e.dataTransfer.effectAllowed = 'move'; th.classList.add('dragging'); });
+    th.addEventListener('dragend', () => { dragFrom = null; th.classList.remove('dragging'); clearDropMarks(); });
+    th.addEventListener('dragover', e => {
+      if (dragFrom === null) return;
+      e.preventDefault();
+      const r = th.getBoundingClientRect();
+      clearDropMarks();
+      th.classList.add(e.clientX > r.left + r.width / 2 ? 'drop-after' : 'drop-before');
+    });
+    th.addEventListener('drop', e => {
+      e.preventDefault();
+      if (dragFrom === null) return;
+      const r = th.getBoundingClientRect();
+      let to = e.clientX > r.left + r.width / 2 ? g + 1 : g;
+      if (dragFrom < to) to--;
+      clearDropMarks();
+      moveFrame(dragFrom, to);
+    });
+    group.appendChild(th);
+  }
+}
+function updateStrip() {
+  const thumbs = stripEl.querySelectorAll('.th');
+  if (thumbs.length !== total()) { buildStrip(); stripKey = ''; return updateStrip(); }
+  // 内容・表示設定が変わったときだけサムネイルを描き直す
+  const key = pages.map(p => p.ver).join() + showBg() + showPaint();
+  thumbs.forEach((th, g) => {
+    if (key !== stripKey) {
+      const { page, cell } = cellOf(g);
+      const t = th.firstChild.getContext('2d');
+      t.fillStyle = '#fff'; t.fillRect(0, 0, t.canvas.width, t.canvas.height);
+      if (showBg()) t.drawImage(page.bg, cellX(cell), cellY(cell), SW, SH, 0, 0, t.canvas.width, t.canvas.height);
+      if (showPaint()) t.drawImage(page, cellX(cell), cellY(cell), SW, SH, 0, 0, t.canvas.width, t.canvas.height);
+      th.classList.toggle('empty', !hasContent(g));
+    }
+    th.classList.toggle('active', g === pageIdx * N + active);
+    th.classList.toggle('playing', g === current);
+  });
+  stripKey = key;
+}
+setInterval(updateStrip, 200);
+
 function loop() {
   if (dirty || camOn()) { render(); dirty = false; }
   requestAnimationFrame(loop);
@@ -895,6 +1020,8 @@ document.addEventListener('keydown', e => {
   else if (e.code === 'KeyE') setTool('eraser');
   else if (e.code === 'KeyC') copyPrev();
   else if (e.code === 'Space' && camOn()) { e.preventDefault(); shoot(); }
+  else if (e.altKey && e.code === 'ArrowRight') { e.preventDefault(); moveActive(1); }
+  else if (e.altKey && e.code === 'ArrowLeft') { e.preventDefault(); moveActive(-1); }
   else if (e.code === 'ArrowRight') setActive(active + 1);
   else if (e.code === 'ArrowLeft') setActive(active - 1);
   else if (e.code === 'PageDown') { e.preventDefault(); goPage(pageIdx + 1); }
