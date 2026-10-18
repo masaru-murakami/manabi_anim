@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2×4 お絵かきパラパラ</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #22252c; --fg: #e8e8ea; --muted: #9aa0aa;
+    --accent: #ff8a3d; --line: #3a3e47;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, "Yu Gothic UI", sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 18px; }
+  main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border-radius: 10px; padding: 12px; }
+  h2 { margin: 0 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
+  #sheet { width: 100%; aspect-ratio: 16 / 9; display: block; background: #fff; border-radius: 6px; touch-action: none; cursor: crosshair; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  .sep { width: 1px; align-self: stretch; background: var(--line); margin: 0 4px; }
+  button, select, input[type=number] {
+    background: #2e323b; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 12px; font-size: 14px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary, button.on { background: var(--accent); border-color: var(--accent); color: #1b1b1b; font-weight: 700; }
+  input[type=number] { width: 70px; }
+  input[type=color] { width: 40px; height: 34px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: none; cursor: pointer; }
+  label { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+  .swatches { display: flex; gap: 4px; }
+  .swatch { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--line); cursor: pointer; padding: 0; }
+  .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.6; }
+  .player-view { background: #000; border-radius: 6px; display: flex; align-items: center; justify-content: center; aspect-ratio: 320 / 360; }
+  #playCanvas { max-width: 100%; max-height: 100%; }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #2e323b; color: var(--muted); }
+  #fileInput, #bgInput { display: none; }
+  .label { font-size: 14px; color: var(--muted); }
+  .pager { margin: 0 0 10px; }
+  .badge.page { font-size: 14px; padding: 6px 12px; color: var(--fg); }
+  .info { color: var(--muted); font-size: 12px; margin-left: auto; }
+  button:disabled { opacity: .4; cursor: default; }
+</style>
+</head>
+<body>
+<header><h1>2×4 お絵かきパラパラ</h1></header>
+<main>
+  <section>
+    <h2>作画（2行×4列）　編集中: <span class="badge" id="activeNo">1</span></h2>
+    <div class="controls pager">
+      <button id="prevPageBtn" title="前のページ (PageUp)">◀ 前</button>
+      <span class="badge page" id="pageNo">ページ 1 / 1</span>
+      <button id="nextPageBtn" title="次のページ (PageDown)">次 ▶</button>
+      <span class="sep"></span>
+      <button id="addPageBtn">＋ ページ追加</button>
+      <button id="delPageBtn">このページを削除</button>
+      <span class="info" id="pageInfo"></span>
+    </div>
+    <canvas id="sheet" width="1280" height="720"></canvas>
+    <div class="controls">
+      <button id="penBtn" class="on">ペン (P)</button>
+      <button id="eraserBtn">消しゴム (E)</button>
+      <input type="color" id="color" value="#222222" title="色">
+      <div class="swatches" id="swatches"></div>
+      <label>太さ <input type="range" id="size" min="1" max="60" value="6"> <span id="sizeVal">6</span></label>
+      <span class="sep"></span>
+      <button id="undoBtn">元に戻す (Ctrl+Z)</button>
+      <button id="redoBtn">やり直し (Ctrl+Y)</button>
+    </div>
+    <div class="controls">
+      <label><input type="checkbox" id="onion" checked> オニオンスキン（前のコマを薄く表示）</label>
+      <button id="copyPrevBtn">前のコマを複製 (C)</button>
+      <button id="clearCellBtn">このコマを消去</button>
+      <button id="clearAllBtn">ページ全消去</button>
+      <span class="sep"></span>
+      <button id="loadBtn">画像読込</button>
+      <input type="file" id="fileInput" accept="image/*">
+      <button id="savePngBtn">PNG 保存（このページ）</button>
+    </div>
+    <div class="controls">
+      <span class="label">背景:</span>
+      <button id="bgCellBtn">このコマに読込</button>
+      <button id="bgAllBtn">全コマに読込</button>
+      <select id="bgFit" title="背景画像の合わせ方">
+        <option value="cover">コマを埋める（はみ出しは切る）</option>
+        <option value="contain">全体を収める（余白あり）</option>
+      </select>
+      <button id="bgClearBtn">このコマの背景を消去</button>
+      <label><input type="checkbox" id="showBg" checked> 背景を表示</label>
+      <input type="file" id="bgInput" accept="image/*">
+    </div>
+    <p class="hint">
+      線は描き始めたコマの中だけに描かれ、隣のコマにははみ出しません。<br>
+      各ページ 上段 1〜4 → 下段 5〜8、続けて次のページの順で再生されます（最大 5 ページ・40 コマ）。<br>
+      ← → キーで編集するコマ、PageUp / PageDown でページを切り替えられます。<br>
+      背景は絵の下の別レイヤーなので、消しゴムで消えません。画像ファイルをコマにドラッグ＆ドロップしても背景になります。
+    </p>
+  </section>
+
+  <section>
+    <h2>パラパラ再生 <span class="badge" id="frameNo">1 / 8</span> <span class="badge" id="framePage">P1</span></h2>
+    <div class="player-view"><canvas id="playCanvas" width="320" height="360"></canvas></div>
+    <div class="controls">
+      <button id="playBtn" class="primary">■ 停止 (Enter)</button>
+      <label>FPS <input type="number" id="fps" value="8" min="1" max="60"></label>
+      <label><input type="checkbox" id="pingpong"> 往復</label>
+      <button id="saveBtn">WebM 保存</button>
+    </div>
+  </section>
+</main>
+
+<script>
+const COLS = 4, ROWS = 2;    // 2行×4列
+const N = COLS * ROWS;       // 1 ページのコマ数
+const MAX_PAGES = 5;         // 最大ページ数
+const W = 1280, H = 720;     // 16:9 の基準サイズ
+const SW = W / COLS;         // 1 コマの幅 (320px)
+const SH = H / ROWS;         // 1 コマの高さ (360px)
+const cellX = i => (i % COLS) * SW;
+const cellY = i => Math.floor(i / COLS) * SH;
+const cellAt = (x, y) => Math.min(ROWS - 1, Math.floor(y / SH)) * COLS + Math.min(COLS - 1, Math.floor(x / SW));
+
+const sheet = document.getElementById('sheet');
+const sctx = sheet.getContext('2d');
+const playCanvas = document.getElementById('playCanvas');
+const pctx = playCanvas.getContext('2d');
+const fpsInput = document.getElementById('fps');
+const playBtn = document.getElementById('playBtn');
+const frameNoEl = document.getElementById('frameNo');
+const framePageEl = document.getElementById('framePage');
+const activeNoEl = document.getElementById('activeNo');
+const sizeInput = document.getElementById('size');
+const colorInput = document.getElementById('color');
+
+let tool = 'pen';
+let active = 0;              // 編集中のコマ（ページ内）
+let current = 0;             // 再生中のコマ（全ページ通し番号）
+let playing = true, playTimer = null, step = 0;
+let stroke = null;           // 描画中のストローク情報
+let dirty = true;
+
+const getFps = () => Math.min(60, Math.max(1, Number(fpsInput.value) || 8));
+
+// ---------- ページ（それぞれ 1280×720 の作画レイヤー） ----------
+const pages = [];
+let pageIdx = 0;
+let paint, ctx;              // 編集中ページのキャンバスと context
+const total = () => pages.length * N;
+
+function newPage() {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  c.bg = document.createElement('canvas');   // 背景レイヤー（作画レイヤーの下）
+  c.bg.width = W; c.bg.height = H;
+  c.bg.getContext('2d', { willReadFrequently: true });
+  c.undo = []; c.redo = [];  // 元に戻す履歴はページごと
+  return c;
+}
+
+function goPage(i) {
+  pageIdx = Math.max(0, Math.min(pages.length - 1, i));
+  paint = pages[pageIdx];
+  ctx = paint.getContext('2d');
+  updatePager();
+  dirty = true;
+}
+
+function updatePager() {
+  document.getElementById('pageNo').textContent = `ページ ${pageIdx + 1} / ${pages.length}`;
+  document.getElementById('prevPageBtn').disabled = pageIdx === 0;
+  document.getElementById('nextPageBtn').disabled = pageIdx === pages.length - 1;
+  document.getElementById('addPageBtn').disabled = pages.length >= MAX_PAGES;
+  document.getElementById('delPageBtn').disabled = pages.length <= 1;
+  document.getElementById('pageInfo').textContent = `全 ${total()} コマ（最大 ${MAX_PAGES} ページ）`;
+  activeNoEl.textContent = `P${pageIdx + 1} - ${active + 1}（通し ${pageIdx * N + active + 1}）`;
+}
+
+function addPage() {
+  if (pages.length >= MAX_PAGES) return;
+  pages.splice(pageIdx + 1, 0, newPage());   // 今のページの次に挿入
+  active = 0;
+  goPage(pageIdx + 1);
+}
+function deletePage() {
+  if (pages.length <= 1 || !confirm(`ページ ${pageIdx + 1} を削除しますか？`)) return;
+  pages.splice(pageIdx, 1);
+  step = 0; current = 0;
+  goPage(Math.min(pageIdx, pages.length - 1));
+}
+document.getElementById('prevPageBtn').onclick = () => goPage(pageIdx - 1);
+document.getElementById('nextPageBtn').onclick = () => goPage(pageIdx + 1);
+document.getElementById('addPageBtn').onclick = addPage;
+document.getElementById('delPageBtn').onclick = deletePage;
+
+// ---------- 元に戻す / やり直し ----------
+const MAX_UNDO = 30;
+const layerCtx = (page, layer) => (layer === 'bg' ? page.bg : page).getContext('2d');
+function pushUndo(layer = 'paint', page = paint) {
+  page.undo.push({ layer, data: layerCtx(page, layer).getImageData(0, 0, W, H) });
+  if (page.undo.length > MAX_UNDO) page.undo.shift();
+  page.redo.length = 0;
+}
+function swapHistory(from, to) {
+  if (!from.length) return;
+  const e = from.pop();
+  const g = layerCtx(paint, e.layer);
+  to.push({ layer: e.layer, data: g.getImageData(0, 0, W, H) });
+  g.putImageData(e.data, 0, 0);
+  dirty = true;
+}
+const undo = () => swapHistory(paint.undo, paint.redo);
+const redo = () => swapHistory(paint.redo, paint.undo);
+document.getElementById('undoBtn').onclick = undo;
+document.getElementById('redoBtn').onclick = redo;
+
+// ---------- 道具 ----------
+function setTool(t) {
+  tool = t;
+  document.getElementById('penBtn').classList.toggle('on', t === 'pen');
+  document.getElementById('eraserBtn').classList.toggle('on', t === 'eraser');
+}
+document.getElementById('penBtn').onclick = () => setTool('pen');
+document.getElementById('eraserBtn').onclick = () => setTool('eraser');
+sizeInput.oninput = () => document.getElementById('sizeVal').textContent = sizeInput.value;
+
+const swatchColors = ['#222222', '#e53935', '#fb8c00', '#fdd835', '#43a047', '#1e88e5', '#8e24aa', '#ffffff'];
+const swatchesEl = document.getElementById('swatches');
+swatchColors.forEach(c => {
+  const b = document.createElement('button');
+  b.className = 'swatch'; b.style.background = c; b.title = c;
+  b.onclick = () => { colorInput.value = c; setTool('pen'); };
+  swatchesEl.appendChild(b);
+});
+
+// コマ移動（ページの端を越えたら隣のページへ）
+function setActive(i) {
+  if (i >= N && pageIdx < pages.length - 1) { active = 0; goPage(pageIdx + 1); return; }
+  if (i < 0 && pageIdx > 0) { active = N - 1; goPage(pageIdx - 1); return; }
+  active = Math.max(0, Math.min(N - 1, i));
+  updatePager();
+  dirty = true;
+}
+
+// ---------- 作画 ----------
+function toSheet(e) {
+  const r = sheet.getBoundingClientRect();
+  return { x: (e.clientX - r.left) * W / r.width, y: (e.clientY - r.top) * H / r.height };
+}
+function lineWidth(e) {
+  const base = Number(sizeInput.value) * (tool === 'eraser' ? 2.5 : 1);
+  // ペンタブレットなら筆圧を反映
+  return e.pointerType === 'pen' && e.pressure > 0 ? base * (0.3 + e.pressure * 1.2) : base;
+}
+function drawSeg(from, to, w) {
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(cellX(stroke.cell), cellY(stroke.cell), SW, SH);   // コマの外にはみ出さない
+  ctx.clip();
+  ctx.globalCompositeOperation = tool === 'eraser' ? 'destination-out' : 'source-over';
+  ctx.strokeStyle = colorInput.value;
+  ctx.lineWidth = w;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(from.x, from.y);
+  ctx.lineTo(to.x + 0.01, to.y);
+  ctx.stroke();
+  ctx.restore();
+  dirty = true;
+}
+
+sheet.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  sheet.setPointerCapture(e.pointerId);
+  const p = toSheet(e);
+  pushUndo();
+  stroke = { cell: cellAt(p.x, p.y), last: p };
+  setActive(stroke.cell);
+  drawSeg(p, p, lineWidth(e));
+});
+sheet.addEventListener('pointermove', e => {
+  if (!stroke) return;
+  const events = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
+  for (const ev of events.length ? events : [e]) {
+    const p = toSheet(ev);
+    drawSeg(stroke.last, p, lineWidth(ev));
+    stroke.last = p;
+  }
+});
+const endStroke = () => { stroke = null; };
+sheet.addEventListener('pointerup', endStroke);
+sheet.addEventListener('pointercancel', endStroke);
+
+// ---------- コマ操作 ----------
+function clearCell(i) {
+  ctx.clearRect(cellX(i), cellY(i), SW, SH);
+  dirty = true;
+}
+document.getElementById('clearCellBtn').onclick = () => { pushUndo(); clearCell(active); };
+document.getElementById('clearAllBtn').onclick = () => {
+  if (!confirm(`ページ ${pageIdx + 1} のすべてのコマを消去しますか？`)) return;
+  pushUndo();
+  for (let i = 0; i < N; i++) clearCell(i);
+};
+
+// 1 つ前のコマ（ページの先頭なら前ページの最後のコマ）
+function prevCell() {
+  if (active > 0) return { page: paint, cell: active - 1 };
+  if (pageIdx > 0) return { page: pages[pageIdx - 1], cell: N - 1 };
+  return null;
+}
+function copyPrev() {
+  const p = prevCell();
+  if (!p) return;
+  pushUndo();
+  ctx.drawImage(p.page, cellX(p.cell), cellY(p.cell), SW, SH, cellX(active), cellY(active), SW, SH);
+  dirty = true;
+}
+document.getElementById('copyPrevBtn').onclick = copyPrev;
+
+// 画像を読み込んでページ全体に敷く（16:9 に収める）
+const fileInput = document.getElementById('fileInput');
+document.getElementById('loadBtn').onclick = () => fileInput.click();
+fileInput.onchange = async () => {
+  const file = fileInput.files[0];
+  fileInput.value = '';
+  if (!file) return;
+  const img = await createImageBitmap(file);
+  pushUndo();
+  ctx.clearRect(0, 0, W, H);
+  const s = Math.min(W / img.width, H / img.height);
+  ctx.drawImage(img, (W - img.width * s) / 2, (H - img.height * s) / 2, img.width * s, img.height * s);
+  dirty = true;
+};
+
+document.getElementById('savePngBtn').onclick = () => {
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
+  if (showBg()) g.drawImage(paint.bg, 0, 0);
+  g.drawImage(paint, 0, 0);
+  c.toBlob(blob => download(blob, `flipbook_page${pageIdx + 1}.png`));
+};
+function download(blob, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------- コマの背景 ----------
+const showBg = () => document.getElementById('showBg').checked;
+document.getElementById('showBg').onchange = () => { dirty = true; };
+
+// 画像を指定したコマの背景レイヤーに描く
+function drawBg(page, cell, img) {
+  const g = page.bg.getContext('2d');
+  const x = cellX(cell), y = cellY(cell);
+  const fit = document.getElementById('bgFit').value;
+  const s = fit === 'cover' ? Math.max(SW / img.width, SH / img.height) : Math.min(SW / img.width, SH / img.height);
+  const w = img.width * s, h = img.height * s;
+  g.save();
+  g.beginPath(); g.rect(x, y, SW, SH); g.clip();
+  g.clearRect(x, y, SW, SH);
+  g.drawImage(img, x + (SW - w) / 2, y + (SH - h) / 2, w, h);
+  g.restore();
+}
+
+// target: 'cell' = 編集中のコマ / 'all' = 全ページの全コマ / 数値 = 今のページのそのコマ
+async function loadBg(file, target) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const img = await createImageBitmap(file);
+  if (target === 'all') {
+    pages.forEach(pg => {
+      pushUndo('bg', pg);
+      for (let i = 0; i < N; i++) drawBg(pg, i, img);
+    });
+  } else {
+    const cell = target === 'cell' ? active : target;
+    pushUndo('bg');
+    drawBg(paint, cell, img);
+    setActive(cell);
+  }
+  dirty = true;
+}
+
+const bgInput = document.getElementById('bgInput');
+let bgTarget = 'cell';
+document.getElementById('bgCellBtn').onclick = () => { bgTarget = 'cell'; bgInput.click(); };
+document.getElementById('bgAllBtn').onclick = () => { bgTarget = 'all'; bgInput.click(); };
+bgInput.onchange = () => { loadBg(bgInput.files[0], bgTarget); bgInput.value = ''; };
+document.getElementById('bgClearBtn').onclick = () => {
+  pushUndo('bg');
+  paint.bg.getContext('2d').clearRect(cellX(active), cellY(active), SW, SH);
+  dirty = true;
+};
+
+// 画像ファイルをコマにドロップするとそのコマの背景になる
+sheet.addEventListener('dragover', e => e.preventDefault());
+sheet.addEventListener('drop', e => {
+  e.preventDefault();
+  const p = toSheet(e);
+  loadBg(e.dataTransfer.files[0], cellAt(p.x, p.y));
+});
+
+// ---------- 表示（背景 + 作画レイヤー + オニオンスキン + ガイド） ----------
+function render() {
+  sctx.fillStyle = '#fff'; sctx.fillRect(0, 0, W, H);
+  if (showBg()) sctx.drawImage(paint.bg, 0, 0);
+  sctx.drawImage(paint, 0, 0);
+
+  // 各コマに 1 つ前のコマを薄く重ねる（白は乗算で消える）
+  if (document.getElementById('onion').checked) {
+    sctx.save();
+    sctx.globalAlpha = 0.2;
+    for (let i = 1; i < N; i++) {
+      sctx.drawImage(paint, cellX(i - 1), cellY(i - 1), SW, SH, cellX(i), cellY(i), SW, SH);
+    }
+    if (pageIdx > 0) {
+      sctx.drawImage(pages[pageIdx - 1], cellX(N - 1), cellY(N - 1), SW, SH, cellX(0), cellY(0), SW, SH);
+    }
+    sctx.restore();
+  }
+
+  sctx.strokeStyle = 'rgba(0,0,0,0.25)';
+  sctx.lineWidth = 2;
+  sctx.beginPath();
+  for (let c = 1; c < COLS; c++) { sctx.moveTo(c * SW, 0); sctx.lineTo(c * SW, H); }
+  for (let r = 1; r < ROWS; r++) { sctx.moveTo(0, r * SH); sctx.lineTo(W, r * SH); }
+  sctx.stroke();
+
+  // 編集中のコマ（オレンジ）と再生中のコマ（青、同じページにあるときだけ）
+  sctx.lineWidth = 4;
+  sctx.strokeStyle = '#ff8a3d';
+  sctx.strokeRect(cellX(active) + 2, cellY(active) + 2, SW - 4, SH - 4);
+  const curPage = Math.floor(current / N), curCell = current % N;
+  if (curPage === pageIdx && curCell !== active) {
+    sctx.setLineDash([8, 6]);
+    sctx.strokeStyle = 'rgba(30,136,229,0.7)';
+    sctx.strokeRect(cellX(curCell) + 4, cellY(curCell) + 4, SW - 8, SH - 8);
+    sctx.setLineDash([]);
+  }
+
+  sctx.font = 'bold 22px system-ui';
+  sctx.textAlign = 'left';
+  for (let i = 0; i < N; i++) {
+    sctx.fillStyle = i === active ? '#ff8a3d' : 'rgba(0,0,0,0.3)';
+    sctx.fillText(`${i + 1}  (${pageIdx * N + i + 1})`, cellX(i) + 10, cellY(i) + 28);
+  }
+}
+function loop() {
+  if (dirty) { render(); dirty = false; }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+
+// ---------- パラパラ再生（全ページ通し） ----------
+function showFrame(g) {
+  g = Math.min(g, total() - 1);
+  current = g;
+  const page = pages[Math.floor(g / N)], cell = g % N;
+  pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, SW, SH);
+  if (showBg()) pctx.drawImage(page.bg, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
+  pctx.drawImage(page, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
+  frameNoEl.textContent = `${g + 1} / ${total()}`;
+  framePageEl.textContent = `P${Math.floor(g / N) + 1}`;
+  dirty = true;
+}
+function indexAt(s) {
+  const T = total();
+  if (!document.getElementById('pingpong').checked) return s % T;
+  const p = s % (2 * T - 2);
+  return p < T ? p : 2 * T - 2 - p;
+}
+function tick() {
+  if (!playing) return;
+  showFrame(indexAt(step++));
+  playTimer = setTimeout(tick, 1000 / getFps());
+}
+function play() {
+  playing = true;
+  playBtn.textContent = '■ 停止 (Enter)';
+  clearTimeout(playTimer); tick();
+}
+function stop() {
+  playing = false; clearTimeout(playTimer);
+  playBtn.textContent = '▶ 再生 (Enter)';
+}
+playBtn.onclick = () => playing ? stop() : play();
+
+// 停止中は作画内容の変化を再生側にも反映
+setInterval(() => { if (!playing) showFrame(current); }, 100);
+
+// ---------- WebM 保存（全ページ 2 周分） ----------
+document.getElementById('saveBtn').onclick = async () => {
+  const wasPlaying = playing;
+  stop();
+  const fps = getFps();
+  const rec = new MediaRecorder(playCanvas.captureStream(fps), { mimeType: 'video/webm' });
+  const chunks = [];
+  rec.ondataavailable = e => chunks.push(e.data);
+  const done = new Promise(r => rec.onstop = r);
+  rec.start();
+  const T = total();
+  const len = document.getElementById('pingpong').checked ? 2 * T - 2 : T;
+  for (let s = 0; s < len * 2; s++) {
+    showFrame(indexAt(s));
+    await new Promise(r => setTimeout(r, 1000 / fps));
+  }
+  rec.stop();
+  await done;
+  download(new Blob(chunks, { type: 'video/webm' }), `paint_flipbook_${T}f_${fps}fps.webm`);
+  if (wasPlaying) play();
+};
+
+// ---------- キーボード ----------
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' && e.target.type !== 'checkbox' && e.target.type !== 'range') return;
+  if (e.ctrlKey && e.code === 'KeyZ') { e.preventDefault(); e.shiftKey ? redo() : undo(); }
+  else if (e.ctrlKey && e.code === 'KeyY') { e.preventDefault(); redo(); }
+  else if (e.ctrlKey) return;
+  else if (e.code === 'Enter') { e.preventDefault(); playing ? stop() : play(); }
+  else if (e.code === 'KeyP') setTool('pen');
+  else if (e.code === 'KeyE') setTool('eraser');
+  else if (e.code === 'KeyC') copyPrev();
+  else if (e.code === 'ArrowRight') setActive(active + 1);
+  else if (e.code === 'ArrowLeft') setActive(active - 1);
+  else if (e.code === 'PageDown') { e.preventDefault(); goPage(pageIdx + 1); }
+  else if (e.code === 'PageUp') { e.preventDefault(); goPage(pageIdx - 1); }
+});
+
+pages.push(newPage());
+goPage(0);
+play();
+</script>
+</body>
+</html>

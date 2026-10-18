@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2×4分割パラパラ</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #22252c; --fg: #e8e8ea; --muted: #9aa0aa;
+    --accent: #ff8a3d; --line: #3a3e47;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, "Yu Gothic UI", sans-serif; }
+  header { padding: 12px 20px; border-bottom: 1px solid var(--line); }
+  h1 { margin: 0; font-size: 18px; }
+  main { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 1fr); gap: 16px; padding: 16px 20px; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  section { background: var(--panel); border-radius: 10px; padding: 12px; }
+  h2 { margin: 0 0 8px; font-size: 14px; color: var(--muted); font-weight: 600; }
+  #source { width: 100%; aspect-ratio: 16 / 9; display: block; background: #000; border-radius: 6px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 10px; }
+  button, select, input[type=number] {
+    background: #2e323b; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 12px; font-size: 14px;
+  }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1b1b1b; font-weight: 700; }
+  input[type=number] { width: 70px; }
+  .hint { color: var(--muted); font-size: 12px; margin: 8px 0 0; }
+  .player-view { background: #000; border-radius: 6px; display: flex; align-items: center; justify-content: center; height: min(70vh, 640px); }
+  #playCanvas { max-width: 100%; max-height: 100%; }
+  .badge { display: inline-block; font-size: 12px; padding: 2px 8px; border-radius: 10px; background: #2e323b; color: var(--muted); }
+  .badge.live { background: #c0392b; color: #fff; }
+  /* display:none だと映像フレームが更新されないブラウザがあるため、見えない状態で配置する */
+  video { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<header><h1>Webcam 2×4分割パラパラ</h1></header>
+<main>
+  <section>
+    <h2>カメラ（16:9 を 2行×4列 に分割） <span class="badge live" id="modeBadge">LIVE</span></h2>
+    <canvas id="source" width="1280" height="720"></canvas>
+    <div class="controls">
+      <select id="cameraSelect" title="カメラ選択"></select>
+      <button id="captureBtn" class="primary">撮影 (Space)</button>
+      <button id="liveBtn">ライブに戻る (L)</button>
+      <label><input type="checkbox" id="mirror"> 左右反転</label>
+    </div>
+    <p class="hint">
+      上段 1〜4、下段 5〜8 の順に 8 コマを並べた紙などをカメラに映すと、右側で 1→8 の順に再生されます。
+      「ライブ」中はカメラ映像をそのまま使い、「撮影」するとその瞬間の画像で固定します。
+    </p>
+  </section>
+
+  <section>
+    <h2>パラパラ再生 <span class="badge" id="frameNo">1 / 8</span></h2>
+    <div class="player-view"><canvas id="playCanvas" width="320" height="360"></canvas></div>
+    <div class="controls">
+      <button id="playBtn" class="primary">■ 停止 (Enter)</button>
+      <label>FPS <input type="number" id="fps" value="8" min="1" max="60"></label>
+      <label><input type="checkbox" id="pingpong"> 往復</label>
+      <button id="saveBtn">WebM 保存</button>
+    </div>
+  </section>
+</main>
+<video id="video" autoplay playsinline muted></video>
+
+<script>
+const COLS = 4, ROWS = 2;    // 2行×4列
+const N = COLS * ROWS;       // コマ数
+const W = 1280, H = 720;     // 16:9 の基準サイズ
+const SW = W / COLS;         // 1 コマの幅 (320px)
+const SH = H / ROWS;         // 1 コマの高さ (360px)
+// コマ番号 → 左上座標（上段左から右、次に下段）
+const cellX = i => (i % COLS) * SW;
+const cellY = i => Math.floor(i / COLS) * SH;
+
+const video = document.getElementById('video');
+const source = document.getElementById('source');
+const sctx = source.getContext('2d');
+const playCanvas = document.getElementById('playCanvas');
+const pctx = playCanvas.getContext('2d');
+const fpsInput = document.getElementById('fps');
+const playBtn = document.getElementById('playBtn');
+const cameraSelect = document.getElementById('cameraSelect');
+const modeBadge = document.getElementById('modeBadge');
+const frameNoEl = document.getElementById('frameNo');
+
+// 16:9 に揃えた現在の画像（ライブ時は毎フレーム更新、撮影時は固定）
+const frameBuf = document.createElement('canvas');
+frameBuf.width = W; frameBuf.height = H;
+const fctx = frameBuf.getContext('2d');
+
+let live = true;
+let playing = true, playTimer = null;
+let step = 0;                // 再生カウンタ
+let current = 0;             // 現在表示中のコマ番号
+let stream = null;
+
+const getFps = () => Math.min(60, Math.max(1, Number(fpsInput.value) || 8));
+
+// ---------- カメラ ----------
+async function startCamera(deviceId) {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  const v = { width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 16 / 9 } };
+  if (deviceId) v.deviceId = { exact: deviceId };
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ video: v, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    await listCameras(stream.getVideoTracks()[0].getSettings().deviceId);
+  } catch (e) {
+    alert('カメラを起動できませんでした: ' + e.message);
+  }
+}
+
+async function listCameras(currentId) {
+  const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+  cameraSelect.innerHTML = '';
+  devices.forEach((d, i) => {
+    const opt = document.createElement('option');
+    opt.value = d.deviceId;
+    opt.textContent = d.label || `カメラ ${i + 1}`;
+    if (d.deviceId === currentId) opt.selected = true;
+    cameraSelect.appendChild(opt);
+  });
+}
+cameraSelect.onchange = () => startCamera(cameraSelect.value);
+
+// カメラ映像を中央から 16:9 に切り出して frameBuf に描く
+function grabVideo() {
+  const vw = video.videoWidth, vh = video.videoHeight;
+  if (!vw) return;
+  let sw = vw, sh = vw * 9 / 16;
+  if (sh > vh) { sh = vh; sw = vh * 16 / 9; }
+  const sx = (vw - sw) / 2, sy = (vh - sh) / 2;
+  fctx.save();
+  if (document.getElementById('mirror').checked) { fctx.translate(W, 0); fctx.scale(-1, 1); }
+  fctx.drawImage(video, sx, sy, sw, sh, 0, 0, W, H);
+  fctx.restore();
+}
+
+// ---------- 左側：分割ガイド付きプレビュー ----------
+function drawSource() {
+  if (live) grabVideo();
+  sctx.drawImage(frameBuf, 0, 0);
+
+  // 再生中のコマ以外を少し暗くする
+  sctx.fillStyle = 'rgba(0,0,0,0.25)';
+  for (let i = 0; i < N; i++) if (i !== current) sctx.fillRect(cellX(i), cellY(i), SW, SH);
+
+  sctx.strokeStyle = 'rgba(255,255,255,0.8)';
+  sctx.lineWidth = 2;
+  sctx.beginPath();
+  for (let c = 1; c < COLS; c++) { sctx.moveTo(c * SW, 0); sctx.lineTo(c * SW, H); }
+  for (let r = 1; r < ROWS; r++) { sctx.moveTo(0, r * SH); sctx.lineTo(W, r * SH); }
+  sctx.stroke();
+  sctx.strokeStyle = '#ff8a3d'; sctx.lineWidth = 6;
+  sctx.strokeRect(cellX(current) + 3, cellY(current) + 3, SW - 6, SH - 6);
+
+  sctx.font = 'bold 28px system-ui';
+  sctx.textAlign = 'center';
+  for (let i = 0; i < N; i++) {
+    sctx.fillStyle = i === current ? '#ff8a3d' : 'rgba(255,255,255,0.85)';
+    sctx.fillText(i + 1, cellX(i) + SW / 2, cellY(i) + 40);
+  }
+  requestAnimationFrame(drawSource);
+}
+requestAnimationFrame(drawSource);
+
+// ---------- 右側：パラパラ再生 ----------
+function showFrame(i) {
+  current = i;
+  pctx.drawImage(frameBuf, cellX(i), cellY(i), SW, SH, 0, 0, SW, SH);
+  frameNoEl.textContent = `${i + 1} / ${N}`;
+}
+
+// 再生順（往復なら 0..7..1）
+function indexAt(s) {
+  if (!document.getElementById('pingpong').checked) return s % N;
+  const p = s % (2 * N - 2);
+  return p < N ? p : 2 * N - 2 - p;
+}
+
+function tick() {
+  if (!playing) return;
+  showFrame(indexAt(step++));
+  playTimer = setTimeout(tick, 1000 / getFps());
+}
+function play() {
+  playing = true;
+  playBtn.textContent = '■ 停止 (Enter)';
+  clearTimeout(playTimer); tick();
+}
+function stop() {
+  playing = false; clearTimeout(playTimer);
+  playBtn.textContent = '▶ 再生 (Enter)';
+}
+playBtn.onclick = () => playing ? stop() : play();
+
+// ---------- 撮影 / ライブ ----------
+function setLive(on) {
+  live = on;
+  modeBadge.textContent = on ? 'LIVE' : '撮影済み';
+  modeBadge.classList.toggle('live', on);
+}
+function capture() {
+  grabVideo();
+  setLive(false);
+  showFrame(current);
+}
+document.getElementById('captureBtn').onclick = capture;
+document.getElementById('liveBtn').onclick = () => setLive(true);
+
+// ---------- WebM 保存（2 周分） ----------
+document.getElementById('saveBtn').onclick = async () => {
+  const wasPlaying = playing;
+  stop();
+  const fps = getFps();
+  const rec = new MediaRecorder(playCanvas.captureStream(fps), { mimeType: 'video/webm' });
+  const chunks = [];
+  rec.ondataavailable = e => chunks.push(e.data);
+  const done = new Promise(r => rec.onstop = r);
+  rec.start();
+  const len = document.getElementById('pingpong').checked ? 2 * N - 2 : N;
+  for (let s = 0; s < len * 2; s++) {
+    showFrame(indexAt(s));
+    await new Promise(r => setTimeout(r, 1000 / fps));
+  }
+  rec.stop();
+  await done;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(chunks, { type: 'video/webm' }));
+  a.download = `flipbook8_${fps}fps.webm`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  if (wasPlaying) play();
+};
+
+// ---------- キーボード ----------
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); capture(); }
+  else if (e.code === 'Enter') { e.preventDefault(); playing ? stop() : play(); }
+  else if (e.code === 'KeyL') setLive(true);
+});
+
+startCamera();
+play();
+</script>
+</body>
+</html>

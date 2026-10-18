@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>パラパラ タイル再生</title>
+<style>
+  :root {
+    --bg: #16181d; --panel: #22252c; --fg: #e8e8ea; --muted: #9aa0aa;
+    --accent: #ff8a3d; --line: #3a3e47;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font-family: system-ui, "Yu Gothic UI", sans-serif; min-height: 100vh; }
+  header {
+    position: sticky; top: 0; z-index: 10; background: var(--bg);
+    display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+    padding: 10px 20px; border-bottom: 1px solid var(--line);
+  }
+  h1 { margin: 0 12px 0 0; font-size: 18px; }
+  button, select {
+    background: #2e323b; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 6px; padding: 7px 12px; font-size: 14px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #1b1b1b; font-weight: 700; }
+  label { font-size: 14px; display: flex; align-items: center; gap: 6px; }
+  .info { color: var(--muted); font-size: 12px; margin-left: auto; }
+  #fileInput { display: none; }
+
+  #grid {
+    display: grid; gap: var(--gap, 8px); padding: 16px 20px;
+    grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+  }
+  .tile { position: relative; background: #000; border-radius: 6px; overflow: hidden; height: var(--tile-h, 320px); }
+  .tile video { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .tile .name {
+    position: absolute; left: 0; right: 0; bottom: 0; padding: 4px 8px; font-size: 11px;
+    background: linear-gradient(transparent, rgba(0,0,0,.7)); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    opacity: 0; transition: opacity .15s;
+  }
+  .tile .del {
+    position: absolute; right: 6px; top: 6px; padding: 2px 8px; font-size: 13px;
+    background: rgba(0,0,0,.6); border: none; opacity: 0; transition: opacity .15s;
+  }
+  .tile:hover .name, .tile:hover .del { opacity: 1; }
+  body.hide-names .tile .name { display: none; }
+
+  #empty {
+    margin: 60px auto; max-width: 520px; text-align: center; color: var(--muted);
+    border: 2px dashed var(--line); border-radius: 12px; padding: 48px 24px;
+  }
+  body.dragover #empty, body.dragover #grid { outline: 3px dashed var(--accent); outline-offset: -8px; }
+  body.fullview header { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>パラパラ タイル再生</h1>
+  <button class="primary" id="addBtn">WebM を追加</button>
+  <input type="file" id="fileInput" accept="video/webm,video/*" multiple>
+  <button id="playBtn">⏸ 一時停止 (Space)</button>
+  <button id="syncBtn" title="全タイルを先頭から同時に再生">頭出し同期 (R)</button>
+  <label>列数
+    <select id="cols">
+      <option>1</option><option>2</option><option>3</option><option selected>4</option>
+      <option>5</option><option>6</option><option>8</option><option>10</option><option>12</option>
+    </select>
+  </label>
+  <label>高さ <input type="range" id="tileH" min="80" max="900" value="320"></label>
+  <label><input type="checkbox" id="showNames" checked> ファイル名</label>
+  <button id="fullBtn" title="ヘッダーを隠して全画面表示 (F / Esc)">全画面 (F)</button>
+  <button id="clearBtn">全削除</button>
+  <span class="info" id="info">0 本</span>
+</header>
+
+<div id="empty">
+  ここに WebM ファイルをドラッグ＆ドロップ<br>
+  または「WebM を追加」から複数選択してください
+</div>
+<div id="grid"></div>
+
+<script>
+const grid = document.getElementById('grid');
+const empty = document.getElementById('empty');
+const info = document.getElementById('info');
+const playBtn = document.getElementById('playBtn');
+let paused = false;
+
+const videos = () => [...grid.querySelectorAll('video')];
+
+function addFiles(files) {
+  for (const file of files) {
+    if (!file.type.startsWith('video/') && !/\.webm$/i.test(file.name)) continue;
+    const tile = document.createElement('div');
+    tile.className = 'tile';
+
+    const v = document.createElement('video');
+    v.src = URL.createObjectURL(file);
+    v.muted = true; v.loop = true; v.playsInline = true; v.autoplay = !paused;
+    // MediaRecorder 製の WebM は長さ情報が無く loop が効かない場合があるので保険
+    v.addEventListener('ended', () => { v.currentTime = 0; if (!paused) v.play(); });
+
+    const name = document.createElement('div');
+    name.className = 'name'; name.textContent = file.name;
+
+    const del = document.createElement('button');
+    del.className = 'del'; del.textContent = '×'; del.title = '削除';
+    del.onclick = () => { URL.revokeObjectURL(v.src); tile.remove(); update(); };
+
+    tile.append(v, name, del);
+    grid.appendChild(tile);
+  }
+  update();
+}
+
+function update() {
+  const n = videos().length;
+  info.textContent = `${n} 本`;
+  empty.style.display = n ? 'none' : '';
+}
+
+// ---------- ファイル追加 ----------
+const fileInput = document.getElementById('fileInput');
+document.getElementById('addBtn').onclick = () => fileInput.click();
+fileInput.onchange = () => { addFiles(fileInput.files); fileInput.value = ''; };
+
+let dragDepth = 0;
+document.addEventListener('dragenter', e => { e.preventDefault(); dragDepth++; document.body.classList.add('dragover'); });
+document.addEventListener('dragleave', () => { if (--dragDepth <= 0) { dragDepth = 0; document.body.classList.remove('dragover'); } });
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop', e => {
+  e.preventDefault(); dragDepth = 0;
+  document.body.classList.remove('dragover');
+  addFiles(e.dataTransfer.files);
+});
+
+// ---------- 再生操作 ----------
+function togglePause() {
+  paused = !paused;
+  videos().forEach(v => paused ? v.pause() : v.play());
+  playBtn.textContent = paused ? '▶ 再生 (Space)' : '⏸ 一時停止 (Space)';
+}
+function syncAll() {
+  videos().forEach(v => { v.currentTime = 0; if (!paused) v.play(); });
+}
+playBtn.onclick = togglePause;
+document.getElementById('syncBtn').onclick = syncAll;
+document.getElementById('clearBtn').onclick = () => {
+  if (!videos().length || !confirm('すべて削除しますか？')) return;
+  videos().forEach(v => URL.revokeObjectURL(v.src));
+  grid.innerHTML = ''; update();
+};
+
+// ---------- 表示設定 ----------
+const colsSel = document.getElementById('cols');
+const tileH = document.getElementById('tileH');
+colsSel.onchange = () => grid.style.setProperty('--cols', colsSel.value);
+tileH.oninput = () => grid.style.setProperty('--tile-h', tileH.value + 'px');
+document.getElementById('showNames').onchange = e => document.body.classList.toggle('hide-names', !e.target.checked);
+
+function toggleFull() {
+  if (document.fullscreenElement) document.exitFullscreen();
+  else document.documentElement.requestFullscreen();
+}
+document.addEventListener('fullscreenchange', () => {
+  document.body.classList.toggle('fullview', !!document.fullscreenElement);
+});
+document.getElementById('fullBtn').onclick = toggleFull;
+
+// ---------- キーボード ----------
+document.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+  if (e.code === 'Space') { e.preventDefault(); togglePause(); }
+  else if (e.code === 'KeyR') syncAll();
+  else if (e.code === 'KeyF') toggleFull();
+});
+
+update();
+</script>
+</body>
+</html>
