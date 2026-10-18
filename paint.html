@@ -90,6 +90,7 @@
         <option value="contain">全体を収める（余白あり）</option>
       </select>
       <button id="bgClearBtn">このコマの背景を消去</button>
+      <button id="bgClearAllBtn">全背景を消去</button>
       <label><input type="checkbox" id="showBg" checked> 背景を表示</label>
       <input type="file" id="bgInput" accept="image/*">
     </div>
@@ -439,6 +440,16 @@ document.getElementById('bgClearBtn').onclick = () => {
   pushUndo('bg');
   paint.bg.getContext('2d').clearRect(cellX(active), cellY(active), SW, SH);
   touch();
+  dirty = true;
+};
+// 全ページの全コマの背景を消す（元に戻すはページごと）
+document.getElementById('bgClearAllBtn').onclick = () => {
+  if (!confirm('全ページの背景をすべて消去しますか？（絵は残ります）')) return;
+  pages.forEach(pg => {
+    pushUndo('bg', pg);
+    pg.bg.getContext('2d').clearRect(0, 0, W, H);
+    touch(pg);
+  });
   dirty = true;
 };
 
