@@ -138,6 +138,7 @@
       <span class="grow"></span>
       <button id="moveLeftBtn" title="編集中のコマを 1 つ前へ (Alt+←)">◀ 前へ移動</button>
       <button id="moveRightBtn" title="編集中のコマを 1 つ後ろへ (Alt+→)">後ろへ移動 ▶</button>
+      <button id="deleteFrameBtn2" class="danger" title="編集中のコマの絵と背景を消し、後ろのコマを前に詰める (Delete)">削除して詰める</button>
     </div>
     <div class="strip" id="strip"></div>
   </section>
@@ -182,6 +183,9 @@
       <div class="bar">
         <button id="clearCellBtn" class="danger">このコマの絵を消去</button>
         <button id="clearAllBtn" class="danger">このページの絵を全消去</button>
+      </div>
+      <div class="bar">
+        <button id="deleteFrameBtn" class="danger" title="編集中のコマの絵と背景を消し、後ろのコマを 1 つずつ前に詰める (Delete)">このコマを削除して詰める</button>
       </div>
     </div>
 
@@ -270,6 +274,7 @@
         <tr><td><kbd>PageUp</kbd> <kbd>PageDown</kbd></td><td>ページ移動</td></tr>
         <tr><td><kbd>C</kbd></td><td>前のコマを複製</td></tr>
         <tr><td><kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd></td><td>編集中のコマを前 / 後ろへ移動</td></tr>
+        <tr><td><kbd>Delete</kbd></td><td>編集中のコマを削除して詰める</td></tr>
         <tr><td><kbd>Space</kbd></td><td>撮影（カメラ開始中）</td></tr>
         <tr><td><kbd>Enter</kbd></td><td>再生 / 停止</td></tr>
       </table>
@@ -827,6 +832,20 @@ function goFrame(g) {
   goPage(Math.floor(g / N));
 }
 const moveActive = d => moveFrame(pageIdx * N + active, pageIdx * N + active + d);
+
+// 通し番号 g のコマの絵と背景を消し、後ろのコマを 1 つずつ前に詰める（最後のコマは空になる）
+function deleteFrame(g) {
+  const T = total();
+  for (let pg = Math.floor(g / N); pg < pages.length; pg++) pushUndo('both', pages[pg]);
+  for (let k = g + 1; k < T; k++) putFrame(k - 1, getFrame(k));
+  const { page, cell } = cellOf(T - 1);
+  ['paint', 'bg'].forEach(l => layerCtx(page, l).clearRect(cellX(cell), cellY(cell), SW, SH));
+  touch(page);
+  goFrame(g);
+}
+const deleteActive = () => deleteFrame(pageIdx * N + active);
+document.getElementById('deleteFrameBtn').onclick = deleteActive;
+document.getElementById('deleteFrameBtn2').onclick = deleteActive;
 document.getElementById('moveLeftBtn').onclick = () => moveActive(-1);
 document.getElementById('moveRightBtn').onclick = () => moveActive(1);
 
@@ -1022,6 +1041,7 @@ document.addEventListener('keydown', e => {
   else if (e.code === 'Space' && camOn()) { e.preventDefault(); shoot(); }
   else if (e.altKey && e.code === 'ArrowRight') { e.preventDefault(); moveActive(1); }
   else if (e.altKey && e.code === 'ArrowLeft') { e.preventDefault(); moveActive(-1); }
+  else if (e.code === 'Delete') { e.preventDefault(); deleteActive(); }
   else if (e.code === 'ArrowRight') setActive(active + 1);
   else if (e.code === 'ArrowLeft') setActive(active - 1);
   else if (e.code === 'PageDown') { e.preventDefault(); goPage(pageIdx + 1); }
