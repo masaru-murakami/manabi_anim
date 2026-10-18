@@ -44,101 +44,213 @@
   .badge.page { font-size: 14px; padding: 6px 12px; color: var(--fg); }
   .info { color: var(--muted); font-size: 12px; margin-left: auto; }
   button:disabled { opacity: .4; cursor: default; }
+
+  /* ---- 再構成したレイアウト ---- */
+  header { display: flex; align-items: baseline; gap: 12px; }
+  header .sub { color: var(--muted); font-size: 12px; }
+  main { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 8px; }
+  .pager { margin: 0 0 10px; }
+  .grow { flex: 1; }
+  .toolbar { gap: 10px; margin-top: 10px; }
+  .toolbar .group { display: flex; gap: 6px; align-items: center; padding: 4px 10px; background: #1b1d22; border-radius: 8px; }
+  .stack { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .wide { width: 100%; }
+  .num { min-width: 2ch; text-align: right; color: var(--muted); }
+  .badge.strong { color: var(--fg); background: #3a3e47; font-size: 13px; }
+  button.danger { border-color: #6b3a3a; }
+  button.danger:hover { border-color: #e05555; background: #3a2626; }
+  .player { position: sticky; top: 12px; }
+  .player h2 { color: var(--fg); }
+  .cards { grid-column: 1 / -1; display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); }
+  .card { background: var(--panel); border-radius: 10px; padding: 12px 14px; }
+  .card h3 { margin: 0 0 4px; font-size: 14px; }
+  .card .label { min-width: 5em; }
+  .card select { max-width: 100%; }
+  .note { color: var(--muted); font-size: 12px; margin: 8px 0 0; line-height: 1.5; }
+  .status { display: block; color: var(--accent); font-size: 12px; margin-top: 6px; min-height: 1em; }
+  .help { grid-column: 1 / -1; }
+  .help summary { cursor: pointer; font-weight: 600; font-size: 14px; }
+  .help ul { margin: 10px 0; padding-left: 20px; color: var(--muted); font-size: 13px; line-height: 1.7; }
+  .help table { font-size: 13px; border-collapse: collapse; }
+  .help td { padding: 3px 14px 3px 0; color: var(--muted); }
+  kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: #2e323b; color: var(--fg); font-size: 12px; font-family: inherit; }
 </style>
 </head>
 <body>
-<header><h1>2×4 お絵かきパラパラ</h1></header>
+<header>
+  <h1>2×4 お絵かきパラパラ</h1>
+  <span class="sub">最大 5 ページ・40 コマ</span>
+</header>
 <main>
-  <section>
-    <h2>作画（2行×4列）　編集中: <span class="badge" id="activeNo">1</span></h2>
-    <div class="controls pager">
-      <button id="prevPageBtn" title="前のページ (PageUp)">◀ 前</button>
+  <!-- ===== 作画エリア ===== -->
+  <section class="work">
+    <div class="bar pager">
+      <button id="prevPageBtn" title="前のページ (PageUp)">◀</button>
       <span class="badge page" id="pageNo">ページ 1 / 1</span>
-      <button id="nextPageBtn" title="次のページ (PageDown)">次 ▶</button>
-      <span class="sep"></span>
-      <button id="addPageBtn">＋ ページ追加</button>
-      <button id="delPageBtn">このページを削除</button>
+      <button id="nextPageBtn" title="次のページ (PageDown)">▶</button>
+      <button id="addPageBtn" title="今のページの次に白紙ページを追加">＋ ページ追加</button>
+      <button id="delPageBtn" class="danger" title="今のページを削除">ページ削除</button>
+      <span class="grow"></span>
+      <span class="label">編集中のコマ</span>
+      <span class="badge strong" id="activeNo">1</span>
       <span class="info" id="pageInfo"></span>
     </div>
+
     <canvas id="sheet" width="1280" height="720"></canvas>
-    <div class="controls">
-      <button id="penBtn" class="on">ペン (P)</button>
-      <button id="eraserBtn">消しゴム (E)</button>
-      <input type="color" id="color" value="#222222" title="色">
-      <div class="swatches" id="swatches"></div>
-      <label>太さ <input type="range" id="size" min="1" max="60" value="6"> <span id="sizeVal">6</span></label>
-      <span class="sep"></span>
-      <button id="undoBtn">元に戻す (Ctrl+Z)</button>
-      <button id="redoBtn">やり直し (Ctrl+Y)</button>
+
+    <div class="bar toolbar">
+      <div class="group">
+        <button id="penBtn" class="on" title="ペン (P)">✏️ ペン</button>
+        <button id="eraserBtn" title="消しゴム (E)">🧽 消しゴム</button>
+      </div>
+      <div class="group">
+        <input type="color" id="color" value="#222222" title="色を自由に選ぶ">
+        <div class="swatches" id="swatches"></div>
+      </div>
+      <div class="group">
+        <label>太さ <input type="range" id="size" min="1" max="60" value="6"> <span id="sizeVal" class="num">6</span></label>
+      </div>
+      <div class="group">
+        <button id="undoBtn" title="元に戻す (Ctrl+Z)">↶ 戻す</button>
+        <button id="redoBtn" title="やり直し (Ctrl+Y)">↷ やり直し</button>
+      </div>
     </div>
-    <div class="controls">
-      <label><input type="checkbox" id="showPaint" checked> 絵（ペン）を表示</label>
-      <label><input type="checkbox" id="onion" checked> オニオンスキン（前のコマを薄く表示）</label>
-      <button id="copyPrevBtn">前のコマを複製 (C)</button>
-      <button id="clearCellBtn">このコマを消去</button>
-      <button id="clearAllBtn">ページ全消去</button>
-      <span class="sep"></span>
-      <button id="loadBtn">画像読込</button>
-      <input type="file" id="fileInput" accept="image/*">
-      <button id="savePngBtn">PNG 保存（このページ）</button>
-    </div>
-    <div class="controls">
-      <span class="label">背景:</span>
-      <button id="bgCellBtn">このコマに読込</button>
-      <button id="bgAllBtn">全コマに読込</button>
-      <select id="bgFit" title="背景画像の合わせ方">
-        <option value="cover">コマを埋める（はみ出しは切る）</option>
-        <option value="contain">全体を収める（余白あり）</option>
-      </select>
-      <button id="bgClearBtn">このコマの背景を消去</button>
-      <button id="bgClearAllBtn">全背景を消去</button>
-      <label><input type="checkbox" id="showBg" checked> 背景を表示</label>
-      <input type="file" id="bgInput" accept="image/*">
-    </div>
-    <div class="controls">
-      <span class="label">動画:</span>
-      <button id="videoBtn">WebM 読込</button>
-      <label>読込先（WebM・カメラ共通）
-        <select id="videoLayer">
-          <option value="bg">背景（上からなぞれる）</option>
-          <option value="paint">絵（消しゴムで編集できる）</option>
-        </select>
-      </label>
-      <label>抽出 FPS <input type="number" id="videoFps" value="8" min="1" max="60"></label>
-      <span class="label" id="videoStatus"></span>
-      <input type="file" id="videoInput" accept="video/webm,video/*">
-    </div>
-    <div class="controls">
-      <span class="label">カメラ:</span>
-      <button id="camBtn">カメラ開始</button>
-      <select id="camSelect" title="カメラ選択"></select>
-      <button id="shotBtn" class="primary" disabled>撮影 (Space)</button>
-      <button id="burstBtn" disabled title="抽出 FPS の間隔で連続撮影">連写 開始</button>
-      <label><input type="checkbox" id="camAdvance" checked> 撮影後に次のコマへ</label>
-      <label><input type="checkbox" id="camMirror" checked> 左右反転</label>
-      <span class="label" id="camStatus"></span>
-    </div>
-    <p class="hint">
-      線は描き始めたコマの中だけに描かれ、隣のコマにははみ出しません。<br>
-      各ページ 上段 1〜4 → 下段 5〜8、続けて次のページの順で再生されます（最大 5 ページ・40 コマ）。<br>
-      ← → キーで編集するコマ、PageUp / PageDown でページを切り替えられます。<br>
-      背景は絵の下の別レイヤーなので、消しゴムで消えません。画像ファイルをコマにドラッグ＆ドロップしても背景になります。<br>
-      WebM は編集中のコマから順に、抽出 FPS の間隔でコマに分解して読み込みます（足りないページは自動追加、最大 40 コマ）。WebM をコマにドロップしても読み込めます。<br>
-      カメラ開始中は編集中のコマにライブ映像が映り、撮影するとそのコマに取り込まれます。
-    </p>
   </section>
 
-  <section>
-    <h2>パラパラ再生 <span class="badge" id="frameNo">1 / 8</span> <span class="badge" id="framePage">P1</span></h2>
+  <!-- ===== 再生エリア ===== -->
+  <section class="player">
+    <h2>▶ パラパラ再生</h2>
     <div class="player-view"><canvas id="playCanvas" width="320" height="360"></canvas></div>
-    <div class="controls">
-      <button id="playBtn" class="primary">■ 停止 (Enter)</button>
-      <label>FPS <input type="number" id="fps" value="8" min="1" max="60"></label>
-      <label><input type="checkbox" id="pingpong"> 往復</label>
-      <label><input type="checkbox" id="skipEmpty" checked> 最後に描いたコマまで再生</label>
-      <button id="saveBtn">WebM 保存</button>
+    <div class="bar">
+      <span class="badge strong" id="frameNo">1 / 8</span>
+      <span class="badge" id="framePage">P1</span>
+    </div>
+    <div class="bar">
+      <button id="playBtn" class="primary wide">■ 停止 (Enter)</button>
+    </div>
+    <div class="stack">
+      <label>速さ <input type="number" id="fps" value="8" min="1" max="60"> FPS</label>
+      <label><input type="checkbox" id="pingpong"> 往復再生（1→8→1）</label>
+      <label title="オフにすると全ページの全コマを再生"><input type="checkbox" id="skipEmpty" checked> 最後に描いたコマまで再生</label>
+    </div>
+    <div class="bar">
+      <button id="saveBtn" class="wide" title="1 コマ目から最後に描いたコマまでを 2 周分書き出し">💾 WebM 動画を書き出し</button>
     </div>
   </section>
+
+  <!-- ===== 機能パネル ===== -->
+  <div class="cards">
+    <div class="card">
+      <h3>👁 表示</h3>
+      <div class="stack">
+        <label><input type="checkbox" id="showPaint" checked> 絵（ペン）を表示</label>
+        <label><input type="checkbox" id="showBg" checked> 背景を表示</label>
+        <label><input type="checkbox" id="onion" checked> オニオンスキン（前のコマを薄く重ねる）</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🎞 コマの操作</h3>
+      <div class="bar">
+        <button id="copyPrevBtn" title="前のコマの絵を編集中のコマに写す (C)">前のコマを複製</button>
+      </div>
+      <div class="bar">
+        <button id="clearCellBtn" class="danger">このコマの絵を消去</button>
+        <button id="clearAllBtn" class="danger">このページの絵を全消去</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🖼 背景</h3>
+      <div class="bar">
+        <span class="label">画像を読込</span>
+        <button id="bgCellBtn">このコマへ</button>
+        <button id="bgAllBtn">全コマへ</button>
+      </div>
+      <div class="bar">
+        <span class="label">消去</span>
+        <button id="bgClearBtn" class="danger">このコマ</button>
+        <button id="bgClearAllBtn" class="danger">全コマ</button>
+      </div>
+      <input type="file" id="bgInput" accept="image/*">
+    </div>
+
+    <div class="card">
+      <h3>⚙ 取り込み設定</h3>
+      <div class="stack">
+        <label>取り込み先
+          <select id="videoLayer" title="WebM 読込・カメラ撮影の取り込み先">
+            <option value="bg">背景（上からなぞれる）</option>
+            <option value="paint">絵（消しゴムで編集できる）</option>
+          </select>
+        </label>
+        <label>大きさ
+          <select id="bgFit" title="背景画像・WebM・カメラの合わせ方">
+            <option value="cover">コマを埋める（はみ出しは切る）</option>
+            <option value="contain">全体を収める（余白あり）</option>
+          </select>
+        </label>
+        <label title="WebM を何 FPS でコマに分けるか / 連写の間隔">間隔 <input type="number" id="videoFps" value="8" min="1" max="60"> FPS（WebM 分解・連写）</label>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📹 WebM から取り込み</h3>
+      <div class="bar">
+        <button id="videoBtn">WebM ファイルを選ぶ</button>
+      </div>
+      <p class="note">編集中のコマから順に入ります（ページは自動追加）。コマへのドラッグ＆ドロップも可。</p>
+      <span class="status" id="videoStatus"></span>
+      <input type="file" id="videoInput" accept="video/webm,video/*">
+    </div>
+
+    <div class="card">
+      <h3>📷 カメラで撮影</h3>
+      <div class="bar">
+        <button id="camBtn">カメラ開始</button>
+        <select id="camSelect" title="カメラ選択"></select>
+      </div>
+      <div class="bar">
+        <button id="shotBtn" class="primary" disabled title="撮影 (Space)">撮影 (Space)</button>
+        <button id="burstBtn" disabled title="間隔 FPS ごとに連続撮影">連写 開始</button>
+      </div>
+      <div class="stack">
+        <label><input type="checkbox" id="camAdvance" checked> 撮影したら次のコマへ進む</label>
+        <label><input type="checkbox" id="camMirror" checked> 左右反転（鏡）</label>
+      </div>
+      <span class="status" id="camStatus"></span>
+    </div>
+
+    <div class="card">
+      <h3>📄 ページ画像</h3>
+      <div class="bar">
+        <button id="loadBtn" title="1 枚の画像をページ全体（8 コマ分）の絵として読み込む">画像を読込（ページ全体）</button>
+        <button id="savePngBtn">PNG で保存（このページ）</button>
+      </div>
+      <input type="file" id="fileInput" accept="image/*">
+    </div>
+
+    <details class="card help">
+      <summary>❔ 使い方・ショートカット</summary>
+      <ul>
+        <li>線は描き始めたコマの中だけに描かれます。</li>
+        <li>再生順は 上段 1〜4 → 下段 5〜8 → 次のページ。</li>
+        <li>背景は絵の下の別レイヤーなので、消しゴムで消えません。画像をコマにドロップしても背景になります。</li>
+        <li>カメラ開始中は、編集中のコマにライブ映像が映ります。</li>
+      </ul>
+      <table>
+        <tr><td><kbd>P</kbd> / <kbd>E</kbd></td><td>ペン / 消しゴム</td></tr>
+        <tr><td><kbd>Ctrl</kbd>+<kbd>Z</kbd> / <kbd>Ctrl</kbd>+<kbd>Y</kbd></td><td>戻す / やり直し</td></tr>
+        <tr><td><kbd>←</kbd> <kbd>→</kbd></td><td>編集するコマを移動</td></tr>
+        <tr><td><kbd>PageUp</kbd> <kbd>PageDown</kbd></td><td>ページ移動</td></tr>
+        <tr><td><kbd>C</kbd></td><td>前のコマを複製</td></tr>
+        <tr><td><kbd>Space</kbd></td><td>撮影（カメラ開始中）</td></tr>
+        <tr><td><kbd>Enter</kbd></td><td>再生 / 停止</td></tr>
+      </table>
+    </details>
+  </div>
 </main>
 
 <script>
