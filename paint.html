@@ -72,6 +72,7 @@
       <button id="redoBtn">やり直し (Ctrl+Y)</button>
     </div>
     <div class="controls">
+      <label><input type="checkbox" id="showPaint" checked> 絵（ペン）を表示</label>
       <label><input type="checkbox" id="onion" checked> オニオンスキン（前のコマを薄く表示）</label>
       <button id="copyPrevBtn">前のコマを複製 (C)</button>
       <button id="clearCellBtn">このコマを消去</button>
@@ -377,7 +378,7 @@ document.getElementById('savePngBtn').onclick = () => {
   const g = c.getContext('2d');
   g.fillStyle = '#fff'; g.fillRect(0, 0, W, H);
   if (showBg()) g.drawImage(paint.bg, 0, 0);
-  g.drawImage(paint, 0, 0);
+  if (showPaint()) g.drawImage(paint, 0, 0);
   c.toBlob(blob => download(blob, `flipbook_page${pageIdx + 1}.png`));
 };
 function download(blob, name) {
@@ -391,6 +392,8 @@ function download(blob, name) {
 // ---------- コマの背景 ----------
 const showBg = () => document.getElementById('showBg').checked;
 document.getElementById('showBg').onchange = () => { dirty = true; };
+const showPaint = () => document.getElementById('showPaint').checked;
+document.getElementById('showPaint').onchange = () => { dirty = true; };
 
 // 画像（または動画の現在フレーム）を指定したコマに描く
 function drawFit(page, cell, img, layer = 'bg', flip = false) {
@@ -617,10 +620,10 @@ function render() {
     sctx.fillStyle = '#000'; sctx.fillRect(cellX(active), cellY(active), SW, SH);
     fitInto(sctx, active, camVideo, camMirror());
   }
-  sctx.drawImage(paint, 0, 0);
+  if (showPaint()) sctx.drawImage(paint, 0, 0);
 
   // 各コマに 1 つ前のコマを薄く重ねる（白は乗算で消える）
-  if (document.getElementById('onion').checked) {
+  if (document.getElementById('onion').checked && showPaint()) {
     sctx.save();
     sctx.globalAlpha = 0.2;
     for (let i = 1; i < N; i++) {
@@ -689,7 +692,7 @@ function hasContent(g) {
   if (page.cache.ver !== page.ver) {
     page.cache = { ver: page.ver, paint: cellsFilled(page), bg: cellsFilled(page.bg) };
   }
-  return page.cache.paint[cell] || (showBg() && page.cache.bg[cell]);
+  return (showPaint() && page.cache.paint[cell]) || (showBg() && page.cache.bg[cell]);
 }
 // 再生するコマの通し番号の一覧
 // trim = true なら 1 コマ目から最後に描いたコマまで（途中の空のコマも含める）
@@ -707,7 +710,7 @@ function showFrame(g, list = playlist()) {
   const page = pages[Math.floor(g / N)], cell = g % N;
   pctx.fillStyle = '#fff'; pctx.fillRect(0, 0, SW, SH);
   if (showBg()) pctx.drawImage(page.bg, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
-  pctx.drawImage(page, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
+  if (showPaint()) pctx.drawImage(page, cellX(cell), cellY(cell), SW, SH, 0, 0, SW, SH);
   const pos = list.indexOf(g);
   frameNoEl.textContent = pos >= 0 ? `${pos + 1} / ${list.length}` : `- / ${list.length}`;
   framePageEl.textContent = `P${Math.floor(g / N) + 1} - ${cell + 1}`;
