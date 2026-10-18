@@ -1091,6 +1091,37 @@ const stamp = () => {
   return `${d.getFullYear()}${z(d.getMonth() + 1)}${z(d.getDate())}_${z(d.getHours())}${z(d.getMinutes())}${z(d.getSeconds())}`;
 };
 
+// Apps Script の GET（一覧）。動けばデプロイ自体は正しい
+async function gasList(url) {
+  let res;
+  try { res = await fetch(url); }
+  catch (e) {
+    throw new Error('Apps Script に接続できません。次を確認してください：'
+      + '① URL が「…/exec」で終わっているか　'
+      + '② デプロイの「アクセスできるユーザー」が「全員」か（「Google アカウントを持つ全員」は不可）　'
+      + '③ 学校・会社のアカウントで外部公開が禁止されていないか');
+  }
+  let d;
+  try { d = JSON.parse(await res.text()); }
+  catch (e) { throw new Error('Apps Script の応答が JSON ではありません（デプロイ設定を確認してください）'); }
+  if (d.error) throw new Error('Apps Script のエラー: ' + d.error);
+  return d.files || [];
+}
+
+// 応答が読めない環境向け：一覧に出たかで成否を判定し、無ければ no-cors で送り直して待つ
+async function confirmUpload(url, name, req) {
+  uploadStatus.textContent = '応答を受け取れなかったため、フォルダを確認中…';
+  const has = async () => (await gasList(url)).some(f => f.name === name);
+  if (await has()) return { name };
+  uploadStatus.textContent = '別の方法で送り直しています…';
+  await fetch(url, { ...req, mode: 'no-cors' });
+  for (let i = 0; i < 6; i++) {
+    await new Promise(r => setTimeout(r, 1500));
+    if (await has()) return { name };
+  }
+  return { error: 'フォルダに保存されませんでした。Code.gs（doPost 入り）を貼り直して「新バージョン」で再デプロイしたか、パスワードが合っているか確認してください' };
+}
+
 let uploading = false;
 document.getElementById('uploadBtn').onclick = async () => {
   if (uploading) return;
@@ -1113,14 +1144,21 @@ document.getElementById('uploadBtn').onclick = async () => {
     const name = `${who ? who + '_' : ''}${stamp()}_${r.frames}f_${r.fps}fps.webm`;
     uploadStatus.textContent = `アップロード中…（${Math.ceil(r.blob.size / 1024)} KB）`;
     // text/plain で送るとプリフライトが発生せず、Apps Script に直接 POST できる
-    const res = await fetch(url, {
+    const req = {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({ name, mimeType: 'video/webm', data: await blobToBase64(r.blob), password: document.getElementById('upPass').value }),
-    });
+    };
     let data;
-    try { data = JSON.parse(await res.text()); }
-    catch (e) { throw new Error('Apps Script の応答を読めません（Code.gs を更新して再デプロイしたか確認してください）'); }
+    try {
+      const res = await fetch(url, req);
+      try { data = JSON.parse(await res.text()); }
+      catch (e) { throw new Error('Apps Script の応答を読めません（Code.gs を更新して「新バージョン」で再デプロイしたか確認してください）'); }
+    } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+      // 応答が読めなかった（Failed to fetch）。届いたかどうかをフォルダの一覧で確かめる
+      data = await confirmUpload(url, name, req);
+    }
     if (data.error) throw new Error(data.error);
     uploadStatus.textContent = `アップロードしました: ${data.name}`;
   } catch (err) {
