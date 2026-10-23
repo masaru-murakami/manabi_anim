@@ -253,7 +253,16 @@
       <div class="stack">
         <label><input type="checkbox" id="camAdvance" checked> 撮影したら次のコマへ進む</label>
         <label><input type="checkbox" id="camMirror" checked> 左右反転（鏡）</label>
+        <label><input type="checkbox" id="camStrip"> 横4コマを同時に撮影
+          <select id="camRow" title="撮影する4コマ">
+            <option value="0">1〜4</option>
+            <option value="1">5〜8</option>
+            <option value="all">1〜8</option>
+          </select>
+        </label>
+        <label><input type="checkbox" id="camStripFlip" checked> 同時撮影の入力画像を左右反転</label>
       </div>
+      <p class="note">同時撮影: カメラ映像の中央を、コマと同じ比率で切り出して分割し、今のページの選んだコマ（4コマ、または 1〜8 の全8コマ）に入れます。</p>
       <span class="status" id="camStatus"></span>
     </div>
 
@@ -743,9 +752,49 @@ function stopCam() {
 camBtn.onclick = () => camStream ? stopCam() : startCam();
 camSelect.onchange = () => startCam(camSelect.value);
 
+// 横4コマ同時撮影: 映像の中央を 4コマ分（SW*4 : SH）の比率で切り出して row 行目に描く
+const stripFlip = () => document.getElementById('camStripFlip').checked;
+const stripOn = () => document.getElementById('camStrip').checked;
+const stripVal = () => document.getElementById('camRow').value;
+const stripRow = () => (stripVal() === 'all' ? 0 : Number(stripVal()));   // 開始行
+const stripRows = () => (stripVal() === 'all' ? ROWS : 1);                // 行数
+function drawStrip(g, row, flip, rows = stripRows()) {
+  const vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+  const ratio = W / (SH * rows);              // 撮影範囲（4コマ×行数）の比率
+  let cw = vw, ch = vw / ratio;
+  if (ch > vh) { ch = vh; cw = vh * ratio; }
+  const sx = (vw - cw) / 2, sy = (vh - ch) / 2;
+  g.save();
+  g.beginPath(); g.rect(0, row * SH, W, SH * rows); g.clip();
+  if (flip) { g.translate(W, 0); g.scale(-1, 1); }
+  g.drawImage(camVideo, sx, sy, cw, ch, 0, row * SH, W, SH * rows);
+  g.restore();
+}
+document.getElementById('camRow').onchange = () => { setActive(stripRow() * COLS); dirty = true; };
+document.getElementById('camStripFlip').onchange = () => { dirty = true; };
+document.getElementById('camStrip').onchange = () => {
+  if (stripOn()) setActive(stripRow() * COLS);
+  dirty = true;
+};
+
+function shootStrip() {
+  const layer = document.getElementById('videoLayer').value;
+  const row = stripRow();
+  pushUndo(layer);
+  const g = layerCtx(paint, layer);
+  g.clearRect(0, row * SH, W, SH * stripRows());
+  drawStrip(g, row, stripFlip());
+  touch(paint);
+  camStatus.textContent = `${row * COLS + 1}〜${(row + stripRows()) * COLS} コマ目を撮影`;
+  sheet.classList.remove('flash'); void sheet.offsetWidth; sheet.classList.add('flash');
+  dirty = true;
+  return true;
+}
+
 // 編集中のコマに取り込む。戻り値 false = これ以上進めない
 function shoot() {
   if (!camOn()) return false;
+  if (stripOn()) return shootStrip();
   const layer = document.getElementById('videoLayer').value;
   pushUndo(layer);
   drawFit(paint, active, camVideo, layer, camMirror());
@@ -781,7 +830,11 @@ videoInput.onchange = () => { loadVideo(videoInput.files[0]); videoInput.value =
 function render() {
   sctx.fillStyle = '#fff'; sctx.fillRect(0, 0, W, H);
   if (showBg()) sctx.drawImage(paint.bg, 0, 0);
-  if (camOn()) {
+  if (camOn() && stripOn()) {
+    const row = stripRow();
+    sctx.fillStyle = '#000'; sctx.fillRect(0, row * SH, W, SH * stripRows());
+    drawStrip(sctx, row, stripFlip());
+  } else if (camOn()) {
     sctx.fillStyle = '#000'; sctx.fillRect(cellX(active), cellY(active), SW, SH);
     fitInto(sctx, active, camVideo, camMirror());
   }
